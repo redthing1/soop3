@@ -9,6 +9,10 @@ repository = "https://github.com/redthing1/soop3"
 keywords = ["http", "fileserver", "upload", "static"]
 categories = ["web-programming", "command-line-utilities"]
 
+[features]
+default = []
+testing = []
+
 [dependencies]
 # web server foundation
 axum = { version = "0.7", features = ["multipart", "tower-log"] }
@@ -51,6 +55,15 @@ tempfile = "3.0"
 tokio-test = "0.4"
 criterion = { version = "0.5", features = ["html_reports"] }
 tower-test = "0.4"
+
+# enable testing feature for test runs
+[[test]]
+name = "unit_tests"
+required-features = ["testing"]
+
+[[test]]
+name = "integration_tests"
+required-features = ["testing"]
 
 # benchmarks will be added later
 # [[bench]]

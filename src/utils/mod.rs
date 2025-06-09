@@ -1,5 +1,5 @@
 // utility functions module
 
-pub mod paths;
 pub mod files;
 pub mod ignore;
+pub mod paths;

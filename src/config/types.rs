@@ -1,8 +1,8 @@
 // configuration type definitions
 
-use std::path::PathBuf;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// command line interface definition
 #[derive(Parser, Debug, Clone)]
@@ -12,34 +12,34 @@ pub struct Cli {
     /// public directory to serve
     #[arg(default_value = ".")]
     pub public_dir: PathBuf,
-    
+
     /// enable file uploads
     #[arg(short = 'u', long)]
     pub enable_upload: bool,
-    
+
     /// host to listen on
     #[arg(short = 'l', long, default_value = "0.0.0.0")]
     pub host: String,
-    
+
     /// port to listen on
     #[arg(short = 'p', long, default_value = "8000")]
     pub port: u16,
-    
+
     /// config file to use
     #[arg(short = 'c', long)]
     pub config_file: Option<PathBuf>,
-    
+
     /// increase verbosity (-v, -vv, -vvv)
     #[arg(short = 'v', long, action = clap::ArgAction::Count)]
     pub verbose: u8,
-    
+
     /// decrease verbosity (-q, -qq)
     #[arg(short = 'q', long, action = clap::ArgAction::Count)]
     pub quiet: u8,
 }
 
 /// complete application configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub security: SecurityConfig,
@@ -58,7 +58,7 @@ pub struct ServerConfig {
 }
 
 /// security and authentication configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct SecurityConfig {
     pub username: Option<String>,
     pub password: Option<String>,
@@ -67,7 +67,7 @@ pub struct SecurityConfig {
 }
 
 /// directory listing configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ListingConfig {
     pub ignore_file: Option<PathBuf>,
 }
@@ -90,22 +90,22 @@ pub struct UploadConfig {
 #[serde(rename_all = "snake_case")]
 pub enum SecurityPolicy {
     #[default]
-    AuthenticateAll,
     AuthenticateNone,
+    AuthenticateAll,
     AuthenticateUpload,
     AuthenticateDownload,
 }
 
 impl std::str::FromStr for SecurityPolicy {
     type Err = String;
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "authenticate_none" => Ok(SecurityPolicy::AuthenticateNone),
             "authenticate_upload" => Ok(SecurityPolicy::AuthenticateUpload),
             "authenticate_download" => Ok(SecurityPolicy::AuthenticateDownload),
             "authenticate_all" => Ok(SecurityPolicy::AuthenticateAll),
-            _ => Err(format!("Invalid security policy: {}", s)),
+            _ => Err(format!("Invalid security policy: {s}")),
         }
     }
 }
@@ -113,18 +113,10 @@ impl std::str::FromStr for SecurityPolicy {
 impl AppConfig {
     /// get the effective upload directory (defaults to public_dir if not set)
     pub fn upload_dir(&self) -> &PathBuf {
-        self.server.upload_dir.as_ref().unwrap_or(&self.server.public_dir)
-    }
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            security: SecurityConfig::default(),
-            listing: ListingConfig::default(),
-            upload: UploadConfig::default(),
-        }
+        self.server
+            .upload_dir
+            .as_ref()
+            .unwrap_or(&self.server.public_dir)
     }
 }
 
@@ -136,24 +128,6 @@ impl Default for ServerConfig {
             public_dir: PathBuf::from("."),
             upload_dir: None,
             enable_upload: false,
-        }
-    }
-}
-
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        Self {
-            username: None,
-            password: None,
-            policy: SecurityPolicy::default(),
-        }
-    }
-}
-
-impl Default for ListingConfig {
-    fn default() -> Self {
-        Self {
-            ignore_file: None,
         }
     }
 }

@@ -1,15 +1,15 @@
 // ignore file pattern matching utilities
 
-use std::path::{Path, PathBuf};
-use std::fs;
+use anyhow::{Context, Result};
 use regex::Regex;
-use anyhow::{Result, Context};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// convert a simple glob pattern to a regex string
 /// supports * (any chars) and ? (single char) like soop2
 pub fn pattern_to_regex(pattern: &str) -> Result<Regex> {
     let mut regex_pattern = String::new();
-    
+
     // escape regex special characters except * and ?
     for ch in pattern.chars() {
         match ch {
@@ -18,11 +18,11 @@ pub fn pattern_to_regex(pattern: &str) -> Result<Regex> {
             '\\' | '^' | '$' | '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '|' => {
                 regex_pattern.push('\\');
                 regex_pattern.push(ch);
-            },
+            }
             _ => regex_pattern.push(ch),
         }
     }
-    
+
     // add start and end anchors for exact matching (soop2 behavior)
     if !regex_pattern.starts_with('^') {
         regex_pattern.insert(0, '^');
@@ -30,22 +30,22 @@ pub fn pattern_to_regex(pattern: &str) -> Result<Regex> {
     if !regex_pattern.ends_with('$') {
         regex_pattern.push('$');
     }
-    
+
     Regex::new(&regex_pattern)
-        .with_context(|| format!("failed to compile regex from pattern: {}", pattern))
+        .with_context(|| format!("failed to compile regex from pattern: {pattern}"))
 }
 
 /// read ignore patterns from a file
 pub fn read_ignore_patterns(ignore_file: &Path) -> Result<Vec<Regex>> {
     let content = fs::read_to_string(ignore_file)
         .with_context(|| format!("failed to read ignore file: {}", ignore_file.display()))?;
-    
+
     let patterns: Result<Vec<Regex>> = content
         .lines()
         .filter(|line| !line.trim().is_empty()) // skip empty lines like soop2
         .map(|line| pattern_to_regex(line.trim()))
         .collect();
-    
+
     patterns.with_context(|| format!("failed to parse patterns from: {}", ignore_file.display()))
 }
 
@@ -65,22 +65,22 @@ pub fn filter_with_ignore_patterns(
         Some(file) => file,
         None => return Ok(entries),
     };
-    
+
     // resolve ignore file path relative to base directory
     let ignore_path = if ignore_file.is_absolute() {
         ignore_file.clone()
     } else {
         base_dir.join(ignore_file)
     };
-    
+
     // if ignore file doesn't exist, return all entries (silent like soop2)
     if !ignore_path.exists() {
         return Ok(entries);
     }
-    
+
     // read ignore patterns
     let patterns = read_ignore_patterns(&ignore_path)?;
-    
+
     // filter entries
     let filtered: Vec<_> = entries
         .into_iter()
@@ -91,21 +91,21 @@ pub fn filter_with_ignore_patterns(
                 Ok(path) => path.to_string_lossy().to_string(),
                 Err(_) => entry.name.clone(), // fallback to just the name
             };
-            
+
             // check if path should be ignored
             !is_path_ignored(&rel_path, &patterns)
         })
         .collect();
-    
+
     Ok(filtered)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
-    
+    use tempfile::TempDir;
+
     #[test]
     fn test_pattern_to_regex() {
         // basic patterns
@@ -114,51 +114,51 @@ mod tests {
         assert!(regex.is_match("another.txt"));
         assert!(!regex.is_match("file.doc"));
         assert!(!regex.is_match("file.txtx")); // $ anchor should prevent this
-        
+
         // single char wildcard
         let regex = pattern_to_regex("test?").unwrap();
         assert!(regex.is_match("test1"));
         assert!(regex.is_match("testa"));
         assert!(!regex.is_match("test"));
         assert!(!regex.is_match("test12"));
-        
+
         // literal patterns
         let regex = pattern_to_regex("build").unwrap();
         assert!(regex.is_match("build"));
         assert!(!regex.is_match("builds"));
         assert!(!regex.is_match("rebuild"));
-        
+
         // special chars should be escaped
         let regex = pattern_to_regex("file.log").unwrap();
         assert!(regex.is_match("file.log"));
         assert!(!regex.is_match("filexlog")); // . should be literal
     }
-    
+
     #[test]
     fn test_ignore_file_reading() {
         let temp_dir = TempDir::new().unwrap();
         let ignore_file = temp_dir.path().join(".gitignore");
-        
+
         fs::write(&ignore_file, "*.log\ntemp*\n\nbuild\n").unwrap();
-        
+
         let patterns = read_ignore_patterns(&ignore_file).unwrap();
         assert_eq!(patterns.len(), 3); // empty line should be skipped
-        
+
         assert!(is_path_ignored("debug.log", &patterns));
         assert!(is_path_ignored("temp123", &patterns));
         assert!(is_path_ignored("build", &patterns));
         assert!(!is_path_ignored("source.rs", &patterns));
     }
-    
+
     #[test]
     fn test_filtering_directory_entries() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
-        
+
         // create ignore file
         let ignore_file = base_dir.join(".gitignore");
         fs::write(&ignore_file, "*.log\ntemp*\nbuild\n").unwrap();
-        
+
         // create test entries
         let entries = vec![
             super::super::files::DirectoryEntry {
@@ -186,13 +186,11 @@ mod tests {
                 is_dir: true,
             },
         ];
-        
-        let filtered = filter_with_ignore_patterns(
-            entries,
-            base_dir,
-            Some(&PathBuf::from(".gitignore"))
-        ).unwrap();
-        
+
+        let filtered =
+            filter_with_ignore_patterns(entries, base_dir, Some(&PathBuf::from(".gitignore")))
+                .unwrap();
+
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "source.rs");
     }

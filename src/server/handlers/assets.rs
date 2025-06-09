@@ -1,10 +1,10 @@
 // embedded static asset handlers
 
 use axum::{
-    extract::Path,
-    response::Response,
-    http::{StatusCode, header},
     body::Body,
+    extract::Path,
+    http::{header, StatusCode},
+    response::Response,
 };
 use rust_embed::RustEmbed;
 use tracing::{info, warn};
@@ -17,21 +17,18 @@ use tracing::{info, warn};
 pub struct StaticAssets;
 
 /// serve embedded static assets
-pub async fn serve_static_asset(
-    Path(asset_path): Path<String>,
-) -> Result<Response, StatusCode> {
+pub async fn serve_static_asset(Path(asset_path): Path<String>) -> Result<Response, StatusCode> {
     info!("serving static asset: {}", asset_path);
-    
+
     // get embedded asset
-    let asset = StaticAssets::get(&asset_path)
-        .ok_or_else(|| {
-            warn!("static asset not found: {}", asset_path);
-            StatusCode::NOT_FOUND
-        })?;
-    
+    let asset = StaticAssets::get(&asset_path).ok_or_else(|| {
+        warn!("static asset not found: {}", asset_path);
+        StatusCode::NOT_FOUND
+    })?;
+
     // determine mime type based on file extension
     let mime_type = get_asset_mime_type(&asset_path);
-    
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, mime_type)
@@ -47,13 +44,12 @@ pub async fn serve_static_asset(
 /// serve embedded favicon.ico specifically
 pub async fn serve_embedded_favicon() -> Result<Response, StatusCode> {
     info!("serving embedded favicon.ico");
-    
-    let asset = StaticAssets::get("favicon.ico")
-        .ok_or_else(|| {
-            warn!("embedded favicon.ico not found");
-            StatusCode::NOT_FOUND
-        })?;
-    
+
+    let asset = StaticAssets::get("favicon.ico").ok_or_else(|| {
+        warn!("embedded favicon.ico not found");
+        StatusCode::NOT_FOUND
+    })?;
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "image/x-icon")

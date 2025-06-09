@@ -1,8 +1,8 @@
 // file operations and formatting utilities
 
+use chrono::{DateTime, Local};
 use std::path::Path;
 use std::time::SystemTime;
-use chrono::{DateTime, Local};
 use tokio::fs;
 
 /// metadata for a directory entry
@@ -18,19 +18,19 @@ pub struct DirectoryEntry {
 pub fn format_file_size(size: u64) -> String {
     const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
     const THRESHOLD: f64 = 1024.0;
-    
+
     if size == 0 {
         return "0 B".to_string();
     }
-    
+
     let mut size_f = size as f64;
     let mut unit_index = 0;
-    
+
     while size_f >= THRESHOLD && unit_index < UNITS.len() - 1 {
         size_f /= THRESHOLD;
         unit_index += 1;
     }
-    
+
     if unit_index == 0 {
         format!("{} {}", size, UNITS[unit_index])
     } else {
@@ -46,15 +46,15 @@ pub fn format_timestamp(timestamp: SystemTime) -> String {
 
 /// collect directory entries asynchronously
 pub async fn collect_directory_entries(
-    dir_path: &Path
+    dir_path: &Path,
 ) -> Result<Vec<DirectoryEntry>, std::io::Error> {
     let mut entries = Vec::new();
     let mut read_dir = fs::read_dir(dir_path).await?;
-    
+
     while let Some(entry) = read_dir.next_entry().await? {
         let metadata = entry.metadata().await?;
         let file_name = entry.file_name();
-        
+
         entries.push(DirectoryEntry {
             name: file_name.to_string_lossy().into_owned(),
             size: metadata.len(),
@@ -62,7 +62,7 @@ pub async fn collect_directory_entries(
             is_dir: metadata.is_dir(),
         });
     }
-    
+
     Ok(entries)
 }
 
@@ -86,7 +86,7 @@ pub fn get_mime_type(file_path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_file_size_formatting() {
         assert_eq!(format_file_size(0), "0 B");
@@ -96,7 +96,7 @@ mod tests {
         assert_eq!(format_file_size(1048576), "1.0 MiB");
         assert_eq!(format_file_size(1073741824), "1.0 GiB");
     }
-    
+
     #[test]
     fn test_html_escaping() {
         assert_eq!(escape_html("normal text"), "normal text");
@@ -104,7 +104,7 @@ mod tests {
         assert_eq!(escape_html("a & b"), "a &amp; b");
         assert_eq!(escape_html("\"quoted\""), "&quot;quoted&quot;");
     }
-    
+
     #[test]
     fn test_mime_type_detection() {
         assert_eq!(get_mime_type(Path::new("file.html")), "text/html");
