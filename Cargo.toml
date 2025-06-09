@@ -11,7 +11,7 @@ categories = ["web-programming", "command-line-utilities"]
 
 [features]
 default = []
-testing = []
+test-helpers = []
 
 [dependencies]
 # web server foundation
@@ -56,14 +56,6 @@ tokio-test = "0.4"
 criterion = { version = "0.5", features = ["html_reports"] }
 tower-test = "0.4"
 
-# enable testing feature for test runs
-[[test]]
-name = "unit_tests"
-required-features = ["testing"]
-
-[[test]]
-name = "integration_tests"
-required-features = ["testing"]
 
 # benchmarks will be added later
 # [[bench]]

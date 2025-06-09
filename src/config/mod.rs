@@ -4,6 +4,7 @@ pub mod loading;
 pub mod types;
 
 pub use loading::load_configuration;
-#[cfg(any(test, feature = "testing"))]
+
+#[cfg(feature = "test-helpers")]
 pub use loading::load_config_from_file;
 pub use types::*;

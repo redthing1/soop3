@@ -4,7 +4,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use soop3::{
     config::{AppConfig, SecurityConfig, SecurityPolicy, ServerConfig},
-    server::create_test_app,
+    server::app::create_test_app,
 };
 use std::fs;
 use tempfile::TempDir;

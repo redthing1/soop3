@@ -38,7 +38,7 @@ pub async fn handle_request(
     let normalized_path = if file_path.starts_with('/') {
         file_path
     } else {
-        format!("/{}", file_path)
+        format!("/{file_path}")
     };
     handle_request_internal(state, normalized_path).await
 }
@@ -258,10 +258,10 @@ fn build_listing_html(
         } else {
             format!("{}/{}", request_path, entry.name)
         };
-        
+
         // add trailing slash for directories to avoid redirect
         let final_entry_path = if entry.is_dir && !entry_path.ends_with('/') {
-            format!("{}/", entry_path)
+            format!("{entry_path}/")
         } else {
             entry_path
         };

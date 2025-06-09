@@ -8,8 +8,6 @@ use figment::{
 use tracing::{debug, info};
 
 use super::types::{AppConfig, Cli, ServerConfig};
-#[cfg(any(test, feature = "testing"))]
-use std::path::Path;
 
 /// load and merge configuration from multiple sources
 /// precedence: defaults < config file < cli arguments
@@ -99,8 +97,8 @@ fn validate_configuration(config: &AppConfig) -> Result<()> {
 }
 
 /// load configuration from a file for testing purposes
-#[cfg(any(test, feature = "testing"))]
-pub fn load_config_from_file(config_path: &Path) -> Result<AppConfig> {
+#[cfg(feature = "test-helpers")]
+pub fn load_config_from_file(config_path: &std::path::Path) -> Result<AppConfig> {
     let figment = Figment::new()
         .merge(Serialized::defaults(AppConfig::default()))
         .merge(Toml::file(config_path));

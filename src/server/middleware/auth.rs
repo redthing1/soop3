@@ -152,7 +152,3 @@ pub struct BasicCredentials {
     pub username: String,
     pub password: String,
 }
-
-/// type alias for easier testing
-#[cfg(any(test, feature = "testing"))]
-pub use BasicCredentials as Credentials;

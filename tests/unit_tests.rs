@@ -321,7 +321,9 @@ max_request_size = 100000000
 #[cfg(test)]
 mod authentication_tests {
     use super::*;
-    use soop3::server::middleware::auth::{parse_basic_auth, validate_credentials, Credentials};
+    use soop3::server::middleware::auth::{
+        parse_basic_auth, validate_credentials, BasicCredentials,
+    };
 
     #[test]
     fn test_basic_auth_parsing() {
@@ -353,28 +355,28 @@ mod authentication_tests {
         };
 
         // correct credentials
-        let valid_creds = Credentials {
+        let valid_creds = BasicCredentials {
             username: "admin".to_string(),
             password: "secret".to_string(),
         };
         assert!(validate_credentials(&security_config, &valid_creds));
 
         // wrong username
-        let invalid_user = Credentials {
+        let invalid_user = BasicCredentials {
             username: "wrong".to_string(),
             password: "secret".to_string(),
         };
         assert!(!validate_credentials(&security_config, &invalid_user));
 
         // wrong password
-        let invalid_pass = Credentials {
+        let invalid_pass = BasicCredentials {
             username: "admin".to_string(),
             password: "wrong".to_string(),
         };
         assert!(!validate_credentials(&security_config, &invalid_pass));
 
         // empty credentials
-        let empty_creds = Credentials {
+        let empty_creds = BasicCredentials {
             username: "".to_string(),
             password: "".to_string(),
         };

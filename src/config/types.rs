@@ -88,6 +88,7 @@ pub struct UploadConfig {
 /// authentication policy options
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)] // Names are descriptive and consistent
 pub enum SecurityPolicy {
     #[default]
     AuthenticateNone,

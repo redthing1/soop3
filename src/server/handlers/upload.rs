@@ -105,11 +105,17 @@ async fn process_upload(
     upload_path: &str,
     file_data: UploadedFile,
 ) -> Result<PathBuf, StatusCode> {
-    // determine target filename
+    // determine target filename - combine upload path with multipart filename
     let base_filename = if upload_path.is_empty() {
         file_data.filename.clone()
     } else {
-        upload_path.to_string()
+        // for directory paths, append the multipart filename
+        let normalized_path = upload_path.trim_end_matches('/');
+        if normalized_path.is_empty() {
+            file_data.filename.clone()
+        } else {
+            format!("{}/{}", normalized_path, file_data.filename)
+        }
     };
 
     let filename = if config.upload.prepend_timestamp {

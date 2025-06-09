@@ -5,7 +5,7 @@ use axum::http::{header, Method, Request, StatusCode};
 use base64::Engine;
 use soop3::{
     config::{AppConfig, SecurityConfig, SecurityPolicy, ServerConfig, UploadConfig},
-    server::create_test_app,
+    server::app::create_test_app,
 };
 use std::fs;
 use std::path::PathBuf;
