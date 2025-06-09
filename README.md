@@ -1,6 +1,6 @@
 # soop3
 
-secure http file server
+the based http fileserver
 
 ## usage
 
