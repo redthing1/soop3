@@ -58,14 +58,14 @@ fn create_app_impl(config: AppConfig, validate: bool) -> Router {
 
     Router::new()
         // static asset routes
-        .route("/__soop_static/*path", get(serve_static_asset))
+        .route("/__soop_static/{*path}", get(serve_static_asset))
         // root route
         .route("/", get(handle_root_request))
         .route("/", post(handle_root_upload_request))
         // file upload routes
-        .route("/*path", post(handle_upload_request))
+        .route("/{*path}", post(handle_upload_request))
         // main file serving route
-        .route("/*path", get(handle_request))
+        .route("/{*path}", get(handle_request))
         // middleware stack
         .layer(
             ServiceBuilder::new()
