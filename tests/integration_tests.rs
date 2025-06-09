@@ -1,6 +1,7 @@
 // integration tests for soop3 server functionality
 
 use std::fs;
+use std::path::PathBuf;
 use tempfile::TempDir;
 use tower::ServiceExt;
 use axum::http::{StatusCode, Method, Request, header};
@@ -484,4 +485,59 @@ async fn test_selective_authentication_policies() {
     
     // should succeed (upload returns 204 No Content)
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn test_ignore_file_functionality() {
+    let temp_dir = TempDir::new().unwrap();
+    let public_dir = temp_dir.path();
+    
+    // create test files
+    fs::write(public_dir.join("main.rs"), "fn main() {}").unwrap();
+    fs::write(public_dir.join("debug.log"), "debug info").unwrap();
+    fs::write(public_dir.join("temp_file"), "temporary").unwrap();
+    fs::create_dir(public_dir.join("build")).unwrap();
+    fs::write(public_dir.join("build/output"), "compiled").unwrap();
+    
+    // create ignore file
+    fs::write(public_dir.join(".gitignore"), "*.log\ntemp*\nbuild\n").unwrap();
+    
+    let config = AppConfig {
+        server: ServerConfig {
+            public_dir: public_dir.to_path_buf(),
+            ..Default::default()
+        },
+        security: SecurityConfig {
+            policy: SecurityPolicy::AuthenticateNone,
+            ..Default::default()
+        },
+        listing: soop3::config::ListingConfig {
+            ignore_file: Some(PathBuf::from(".gitignore")),
+        },
+        ..Default::default()
+    };
+    
+    let app = create_test_app(config);
+    
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+    
+    // should contain main.rs (not ignored)
+    assert!(body_str.contains("main.rs"));
+    
+    // should NOT contain ignored files
+    assert!(!body_str.contains("debug.log"));
+    assert!(!body_str.contains("temp_file"));
+    assert!(!body_str.contains("build"));
 }

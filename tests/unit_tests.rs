@@ -88,7 +88,9 @@ mod utils_tests {
             // test that returned paths are correct
             let result = join_path_jailed(base_path, "test.txt").unwrap();
             assert!(result.exists());
-            assert!(result.starts_with(base_path));
+            // canonicalize both paths for comparison (handles symlinks on macOS)
+            let canonical_base = base_path.canonicalize().unwrap();
+            assert!(result.starts_with(&canonical_base));
         }
 
         #[test]
@@ -104,6 +106,9 @@ mod utils_tests {
             assert!(join_path_jailed(base_path, "../outside.txt").is_err());
             assert!(join_path_jailed(base_path, "../../etc/passwd").is_err());
             assert!(join_path_jailed(base_path, "/etc/passwd").is_err());
+            
+            // windows-style paths with backslashes (only test on windows)
+            #[cfg(windows)]
             assert!(join_path_jailed(base_path, "\\..\\outside.txt").is_err());
             
             // encoded traversal attempts should also fail
@@ -123,17 +128,21 @@ mod utils_tests {
             
             // create test structure
             fs::create_dir(base_path.join("sub")).unwrap();
+            fs::create_dir(base_path.join("other")).unwrap();
             fs::write(base_path.join("sub/file.txt"), "content").unwrap();
             
             // these should all resolve to the same file
             let normal = join_path_jailed(base_path, "sub/file.txt").unwrap();
             let with_dot = join_path_jailed(base_path, "sub/./file.txt").unwrap();
-            let with_redundant = join_path_jailed(base_path, "other/../sub/file.txt");
+            let with_redundant = join_path_jailed(base_path, "other/../sub/file.txt").unwrap();
             
             assert_eq!(normal.file_name(), Some(std::ffi::OsStr::new("file.txt")));
             assert_eq!(with_dot.file_name(), Some(std::ffi::OsStr::new("file.txt")));
-            // the redundant path should fail because "other" doesn't exist
-            assert!(with_redundant.is_err());
+            assert_eq!(with_redundant.file_name(), Some(std::ffi::OsStr::new("file.txt")));
+            
+            // test a path that should fail due to traversal
+            let traversal_attempt = join_path_jailed(base_path, "sub/../../outside.txt");
+            assert!(traversal_attempt.is_err());
         }
 
         #[test]
@@ -157,7 +166,8 @@ mod utils_tests {
             
             // non-existent files should still be jailed properly
             let result = join_path_jailed(base_path, "nonexistent.txt").unwrap();
-            assert!(result.starts_with(base_path));
+            let canonical_base = base_path.canonicalize().unwrap();
+            assert!(result.starts_with(&canonical_base));
             assert_eq!(result.file_name(), Some(std::ffi::OsStr::new("nonexistent.txt")));
             
             // but traversal attempts on non-existent files should still fail
@@ -177,8 +187,8 @@ mod utils_tests {
             let err = join_path_jailed(temp_dir.path(), "../outside.txt").unwrap_err();
             assert!(matches!(err, PathTraversalError::OutsideJail { .. }));
             
-            // test invalid encoding
-            let result = join_path_jailed(temp_dir.path(), "file%XX.txt");
+            // test invalid encoding (use actually invalid UTF-8 sequence)
+            let result = join_path_jailed(temp_dir.path(), "file%C0%C1.txt");
             assert!(matches!(result, Err(PathTraversalError::InvalidEncoding)));
         }
     }
@@ -201,9 +211,9 @@ mod config_tests {
         assert!(config.security.password.is_none());
         assert_eq!(config.security.policy, SecurityPolicy::AuthenticateAll);
         
-        assert!(!config.upload.prepend_timestamp);
+        assert!(config.upload.prepend_timestamp); // default is true in soop2
         assert!(config.upload.prevent_overwrite);
-        assert_eq!(config.upload.max_request_size, 50 * 1024 * 1024); // 50MB
+        assert_eq!(config.upload.max_request_size, 1024 * 1024 * 1024); // 1 GiB like soop2
     }
 
     #[test]

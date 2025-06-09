@@ -18,7 +18,7 @@ use crate::utils::paths::join_path_jailed;
 #[instrument(skip(state, multipart))]
 pub async fn handle_root_upload_request(
     State(state): State<AppState>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> Result<Response, StatusCode> {
     handle_upload_impl(state, "", multipart).await
 }
@@ -28,7 +28,7 @@ pub async fn handle_root_upload_request(
 pub async fn handle_upload_request(
     State(state): State<AppState>,
     Path(upload_path): Path<String>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> Result<Response, StatusCode> {
     handle_upload_impl(state, &upload_path, multipart).await
 }

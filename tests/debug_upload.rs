@@ -1,6 +1,5 @@
 // debug upload functionality
 
-use std::fs;
 use tempfile::TempDir;
 use tower::ServiceExt;
 use axum::http::{StatusCode, Method, Request, header};

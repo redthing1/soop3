@@ -15,6 +15,7 @@ use crate::server::app::AppState;
 use crate::utils::{
     paths::join_path_jailed,
     files::{collect_directory_entries, format_file_size, format_timestamp, escape_html, get_mime_type, DirectoryEntry},
+    ignore::filter_with_ignore_patterns,
 };
 use super::assets::serve_embedded_favicon;
 
@@ -141,16 +142,34 @@ async fn handle_directory_request(
 
 /// generate html directory listing
 async fn generate_directory_listing(
-    _state: &AppState,
+    state: &AppState,
     dir_path: &PathBuf,
     request_path: &str,
 ) -> Result<Response, StatusCode> {
     // collect directory entries
-    let entries = collect_directory_entries(dir_path).await
+    let mut entries = collect_directory_entries(dir_path).await
         .map_err(|e| {
             error!("failed to read directory {}: {}", dir_path.display(), e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
+    
+    // apply ignore file filtering if configured
+    entries = match filter_with_ignore_patterns(
+        entries,
+        &state.config.server.public_dir,
+        state.config.listing.ignore_file.as_ref()
+    ) {
+        Ok(filtered) => filtered,
+        Err(e) => {
+            warn!("ignore file filtering failed: {}, continuing without filtering", e);
+            // we've already moved entries, so recreate the list
+            collect_directory_entries(dir_path).await
+                .map_err(|e| {
+                    error!("failed to re-read directory {}: {}", dir_path.display(), e);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?
+        }
+    };
     
     // sort entries (directories first, then alphabetical)
     let mut sorted_entries = entries;
