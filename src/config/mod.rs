@@ -4,4 +4,4 @@ pub mod types;
 pub mod loading;
 
 pub use types::*;
-pub use loading::load_configuration;
+pub use loading::{load_configuration, load_config_from_file};

@@ -7,7 +7,7 @@ use axum::{
     response::Response,
 };
 use base64::prelude::*;
-use tracing::{warn, debug};
+use tracing::{warn, debug, error};
 
 use crate::{
     config::{SecurityPolicy, SecurityConfig},
@@ -32,8 +32,8 @@ pub async fn authenticate_if_required(
         && state.config.security.password.is_some();
     
     if !auth_available {
-        debug!("authentication required but not configured, allowing request");
-        return Ok(next.run(request).await);
+        error!("authentication required but credentials not configured");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     
     // extract and validate credentials
@@ -79,7 +79,7 @@ fn determine_auth_requirement(security_config: &SecurityConfig, request: &Reques
 }
 
 /// parse http basic authentication header
-fn parse_basic_auth(auth_header: &str) -> Result<BasicCredentials, &'static str> {
+pub fn parse_basic_auth(auth_header: &str) -> Result<BasicCredentials, &'static str> {
     // header format: "Basic <base64-encoded-credentials>"
     let auth_header = auth_header.strip_prefix("Basic ")
         .ok_or("not a basic auth header")?;
@@ -102,7 +102,7 @@ fn parse_basic_auth(auth_header: &str) -> Result<BasicCredentials, &'static str>
 }
 
 /// validate credentials against configuration
-fn validate_credentials(security_config: &SecurityConfig, credentials: &BasicCredentials) -> bool {
+pub fn validate_credentials(security_config: &SecurityConfig, credentials: &BasicCredentials) -> bool {
     let expected_username = match &security_config.username {
         Some(username) => username,
         None => return false,
@@ -119,7 +119,7 @@ fn validate_credentials(security_config: &SecurityConfig, credentials: &BasicCre
 }
 
 /// constant-time string comparison to prevent timing attacks
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -134,7 +134,10 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 /// basic authentication credentials
 #[derive(Debug)]
-struct BasicCredentials {
-    username: String,
-    password: String,
+pub struct BasicCredentials {
+    pub username: String,
+    pub password: String,
 }
+
+/// type alias for easier testing
+pub type Credentials = BasicCredentials;

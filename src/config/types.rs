@@ -86,7 +86,7 @@ pub struct UploadConfig {
 }
 
 /// authentication policy options
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SecurityPolicy {
     #[default]
@@ -94,6 +94,20 @@ pub enum SecurityPolicy {
     AuthenticateNone,
     AuthenticateUpload,
     AuthenticateDownload,
+}
+
+impl std::str::FromStr for SecurityPolicy {
+    type Err = String;
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "authenticate_none" => Ok(SecurityPolicy::AuthenticateNone),
+            "authenticate_upload" => Ok(SecurityPolicy::AuthenticateUpload),
+            "authenticate_download" => Ok(SecurityPolicy::AuthenticateDownload),
+            "authenticate_all" => Ok(SecurityPolicy::AuthenticateAll),
+            _ => Err(format!("Invalid security policy: {}", s)),
+        }
+    }
 }
 
 impl AppConfig {

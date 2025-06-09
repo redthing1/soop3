@@ -5,6 +5,7 @@ use figment::{Figment, providers::{Toml, Serialized, Format}};
 use tracing::{info, debug};
 
 use super::types::{Cli, AppConfig, ServerConfig};
+use std::path::Path;
 
 /// load and merge configuration from multiple sources
 /// precedence: defaults < config file < cli arguments
@@ -91,6 +92,18 @@ fn validate_configuration(config: &AppConfig) -> Result<()> {
     }
     
     Ok(())
+}
+
+/// load configuration from a file for testing purposes
+pub fn load_config_from_file(config_path: &Path) -> Result<AppConfig> {
+    let figment = Figment::new()
+        .merge(Serialized::defaults(AppConfig::default()))
+        .merge(Toml::file(config_path));
+        
+    let config: AppConfig = figment.extract()
+        .context("failed to parse configuration file")?;
+        
+    Ok(config)
 }
 
 #[cfg(test)]

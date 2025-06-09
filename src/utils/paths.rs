@@ -43,10 +43,40 @@ pub fn join_path_jailed(
         joined.canonicalize()
             .map_err(|_| PathTraversalError::InvalidTargetPath)?
     } else {
-        // file doesn't exist yet, manually resolve from canonical base
-        let relative_part = joined.strip_prefix(base_dir)
+        // file doesn't exist yet, resolve manually by normalizing path components
+        let relative_path = joined.strip_prefix(base_dir)
             .map_err(|_| PathTraversalError::InvalidTargetPath)?;
-        canonical_base.join(relative_part)
+        
+        // normalize the relative path by resolving . and .. components
+        let mut normalized_components = Vec::new();
+        for component in relative_path.components() {
+            match component {
+                Component::Normal(name) => normalized_components.push(name),
+                Component::ParentDir => {
+                    if normalized_components.is_empty() {
+                        // trying to go above the base directory
+                        return Err(PathTraversalError::OutsideJail {
+                            base: canonical_base.clone(),
+                            target: joined,
+                        });
+                    }
+                    normalized_components.pop();
+                },
+                Component::CurDir => {
+                    // ignore current directory references
+                },
+                _ => {
+                    return Err(PathTraversalError::InvalidTargetPath);
+                }
+            }
+        }
+        
+        // rebuild the path from canonical base
+        let mut result = canonical_base.clone();
+        for component in normalized_components {
+            result.push(component);
+        }
+        result
     };
     
     // ensure result is within jail boundaries
@@ -92,43 +122,6 @@ fn normalize_path_component(component: &str) -> Result<PathBuf, PathTraversalErr
     Ok(normalized)
 }
 
-/// manually resolve a path when canonicalize fails (e.g., for non-existent files)
-#[allow(dead_code)]  
-fn resolve_path_manually(base: &Path, target: &Path) -> PathBuf {
-    let mut resolved = base.to_path_buf();
-    
-    // add each component of the relative part
-    if let Ok(relative) = target.strip_prefix(base) {
-        resolved.push(relative);
-    } else {
-        // fallback: use the target as-is
-        return target.to_path_buf();
-    }
-    
-    // normalize by handling .. and . components
-    let mut components = Vec::new();
-    for component in resolved.components() {
-        match component {
-            Component::ParentDir => {
-                components.pop();
-            },
-            Component::CurDir => {
-                // ignore
-            },
-            other => {
-                components.push(other);
-            },
-        }
-    }
-    
-    // rebuild path
-    let mut result = PathBuf::new();
-    for component in components {
-        result.push(component);
-    }
-    
-    result
-}
 
 #[cfg(test)]
 mod tests {

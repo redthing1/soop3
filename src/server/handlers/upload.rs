@@ -14,11 +14,29 @@ use tracing::{info, warn, error, instrument};
 use crate::server::app::AppState;
 use crate::utils::paths::join_path_jailed;
 
-/// handle file upload requests
+/// handle file upload requests to root directory
+#[instrument(skip(state, multipart))]
+pub async fn handle_root_upload_request(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Response, StatusCode> {
+    handle_upload_impl(state, "", multipart).await
+}
+
+/// handle file upload requests with path
 #[instrument(skip(state, multipart), fields(path = %upload_path))]
 pub async fn handle_upload_request(
     State(state): State<AppState>,
     Path(upload_path): Path<String>,
+    mut multipart: Multipart,
+) -> Result<Response, StatusCode> {
+    handle_upload_impl(state, &upload_path, multipart).await
+}
+
+/// internal implementation for upload handling
+async fn handle_upload_impl(
+    state: AppState,
+    upload_path: &str,
     mut multipart: Multipart,
 ) -> Result<Response, StatusCode> {
     info!("processing upload request");
@@ -92,11 +110,17 @@ async fn process_upload(
     file_data: UploadedFile,
 ) -> Result<PathBuf, StatusCode> {
     // determine target filename
-    let filename = if config.upload.prepend_timestamp {
-        let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
-        format!("{}_{}", timestamp, upload_path)
+    let base_filename = if upload_path.is_empty() {
+        file_data.filename.clone()
     } else {
         upload_path.to_string()
+    };
+    
+    let filename = if config.upload.prepend_timestamp {
+        let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
+        format!("{}_{}", timestamp, base_filename)
+    } else {
+        base_filename
     };
     
     info!("target filename: {} (original: {})", filename, file_data.filename);
