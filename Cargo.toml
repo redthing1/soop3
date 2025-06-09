@@ -1,0 +1,68 @@
+[package]
+name = "soop3"
+version = "0.9.0"
+edition = "2021"
+authors = ["redthing1"]
+description = "the based http fileserver (rust port)"
+license = "proprietary"
+repository = "https://github.com/redthing1/soop3"
+keywords = ["http", "fileserver", "upload", "static"]
+categories = ["web-programming", "command-line-utilities"]
+
+[dependencies]
+# web server foundation
+axum = { version = "0.7", features = ["multipart", "tower-log"] }
+tokio = { version = "1.0", features = ["full"] }
+tower = { version = "0.4", features = ["full"] }
+tower-http = { version = "0.5", features = ["fs", "trace", "auth"] }
+
+# configuration and cli
+clap = { version = "4.0", features = ["derive", "env"] }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+figment = { version = "0.10", features = ["toml", "env"] }
+
+# error handling and logging
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+# file operations and utilities
+walkdir = "2.0"
+mime_guess = "2.0"
+chrono = { version = "0.4", features = ["serde"] }
+rust-embed = { version = "8.0", features = ["compression", "include-exclude"] }
+
+# security and validation
+base64 = "0.21"
+percent-encoding = "2.0"
+
+# async utilities
+futures = "0.3"
+bytes = "1.0"
+http = "1.0"
+hyper = { version = "1.0", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+
+[dev-dependencies]
+tempfile = "3.0"
+tokio-test = "0.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+tower-test = "0.4"
+
+# benchmarks will be added later
+# [[bench]]
+# name = "server_bench"
+# harness = false
+
+[profile.release]
+lto = true              # link-time optimization
+codegen-units = 1       # better optimization
+panic = "abort"         # smaller binary size
+strip = true            # remove debug symbols
+
+[profile.dev]
+# faster compilation during development
+opt-level = 0
+debug = true

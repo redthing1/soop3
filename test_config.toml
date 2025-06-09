@@ -1,0 +1,16 @@
+[server]
+host = "127.0.0.1"
+port = 8030
+enable_upload = true
+
+[security]
+username = "testuser"
+password = "testpass"
+policy = "authenticate_all"
+
+[upload]
+prepend_timestamp = false
+prevent_overwrite = false
+
+[listing]
+# no specific settings needed
