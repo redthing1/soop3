@@ -98,6 +98,7 @@ fn validate_configuration(config: &AppConfig) -> Result<()> {
 
 /// load configuration from a file for testing purposes
 #[cfg(feature = "test-helpers")]
+#[allow(dead_code)]
 pub fn load_config_from_file(config_path: &std::path::Path) -> Result<AppConfig> {
     let figment = Figment::new()
         .merge(Serialized::defaults(AppConfig::default()))

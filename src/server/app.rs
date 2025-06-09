@@ -43,6 +43,7 @@ pub fn create_app(config: AppConfig) -> Router {
 
 /// create app for testing (skips validation)
 #[cfg(feature = "test-helpers")]
+#[allow(dead_code)]
 pub fn create_test_app(config: AppConfig) -> Router {
     create_app_impl(config, false)
 }
