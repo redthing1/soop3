@@ -1,7 +1,7 @@
 // integration tests for soop3 server functionality
 
 use axum::body::Body;
-use axum::http::{header, Method, Request, StatusCode};
+use axum::http::{Method, Request, StatusCode, header};
 use base64::Engine;
 use soop3::{
     config::{AppConfig, SecurityConfig, SecurityPolicy, ServerConfig, UploadConfig},

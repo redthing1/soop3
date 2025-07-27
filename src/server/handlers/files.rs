@@ -3,7 +3,7 @@
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::Response,
 };
 use std::path::{Path as StdPath, PathBuf};
@@ -15,8 +15,8 @@ use super::assets::serve_embedded_favicon;
 use crate::server::app::AppState;
 use crate::utils::{
     files::{
-        collect_directory_entries, escape_html, format_file_size, format_timestamp, get_mime_type,
-        DirectoryEntry,
+        DirectoryEntry, collect_directory_entries, escape_html, format_file_size, format_timestamp,
+        get_mime_type,
     },
     ignore::filter_with_ignore_patterns,
     paths::join_path_jailed,

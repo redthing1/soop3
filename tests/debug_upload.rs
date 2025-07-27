@@ -1,7 +1,7 @@
 // debug upload functionality
 
 use axum::body::Body;
-use axum::http::{header, Method, Request, StatusCode};
+use axum::http::{Method, Request, StatusCode, header};
 use soop3::{
     config::{AppConfig, SecurityConfig, SecurityPolicy, ServerConfig, UploadConfig},
     server::app::create_test_app,

@@ -2,8 +2,8 @@
 
 use anyhow::{Context, Result};
 use figment::{
-    providers::{Format, Serialized, Toml},
     Figment,
+    providers::{Format, Serialized, Toml},
 };
 use tracing::{debug, info};
 

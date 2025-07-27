@@ -3,13 +3,13 @@
 
 use anyhow::Result;
 use clap::Parser;
-use tracing::{info, Level};
+use tracing::{Level, info};
 
 mod config;
 mod server;
 mod utils;
 
-use config::{load_configuration, Cli};
+use config::{Cli, load_configuration};
 use server::start_server;
 
 #[tokio::main]

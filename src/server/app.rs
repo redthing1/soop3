@@ -2,15 +2,14 @@
 
 use anyhow::{Context, Result};
 use axum::{
-    middleware,
+    Router, middleware,
     routing::{get, post},
-    Router,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::{
     handlers::{
@@ -83,16 +82,34 @@ fn create_app_impl(config: AppConfig, validate: bool) -> Router {
 pub async fn start_server(config: AppConfig) -> Result<()> {
     let app = create_app(config.clone());
 
-    // create socket address
-    let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
-        .parse()
-        .context("invalid host/port combination")?;
+    // resolve hostname to socket address
+    let host_port = format!("{}:{}", config.server.host, config.server.port);
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(&host_port)
+        .await
+        .with_context(|| format!("failed to resolve hostname: {host_port}"))?
+        .collect();
+
+    if addrs.is_empty() {
+        return Err(anyhow::anyhow!(
+            "hostname '{}' did not resolve to any addresses",
+            config.server.host
+        ));
+    }
+
+    // use the first resolved address
+    let addr = addrs[0];
+
+    // log hostname resolution if not an IP address
+    if config.server.host.parse::<std::net::IpAddr>().is_err() {
+        debug!("resolved hostname '{}' to {}", config.server.host, addr);
+    }
 
     // log startup information
     info!(
-        "starting soop3 v{} at http://{}",
+        "starting soop3 v{} at http://{}:{}",
         env!("CARGO_PKG_VERSION"),
-        addr
+        config.server.host,
+        config.server.port
     );
     info!("public dir: {}", config.server.public_dir.display());
 

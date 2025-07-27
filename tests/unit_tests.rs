@@ -1,10 +1,10 @@
 // comprehensive unit tests for all soop3 modules
 
 use soop3::{
-    config::{load_config_from_file, AppConfig, SecurityConfig, SecurityPolicy, ServerConfig},
+    config::{AppConfig, SecurityConfig, SecurityPolicy, ServerConfig, load_config_from_file},
     utils::{
         files::{escape_html, format_file_size, format_timestamp, get_mime_type},
-        paths::{join_path_jailed, PathTraversalError},
+        paths::{PathTraversalError, join_path_jailed},
     },
 };
 use std::fs;
@@ -322,7 +322,7 @@ max_request_size = 100000000
 mod authentication_tests {
     use super::*;
     use soop3::server::middleware::auth::{
-        parse_basic_auth, validate_credentials, BasicCredentials,
+        BasicCredentials, parse_basic_auth, validate_credentials,
     };
 
     #[test]
