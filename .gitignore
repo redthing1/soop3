@@ -1,5 +1,6 @@
 .claude
 reference
+temp
 
 # Created by https://www.toptal.com/developers/gitignore/api/linux,macos,visualstudiocode,python,rust,c++,d
 # Edit at https://www.toptal.com/developers/gitignore?templates=linux,macos,visualstudiocode,python,rust,c++,d
