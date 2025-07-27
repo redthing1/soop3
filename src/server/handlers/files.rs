@@ -3,9 +3,10 @@
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::Response,
 };
+use http_range_header::parse_range_header as parse_http_range;
 use std::path::{Path as StdPath, PathBuf};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -110,22 +111,49 @@ async fn handle_file_request(
 
     // check for range header
     if let Some(range_header) = headers.get(header::RANGE) {
-        // parse range header
-        match parse_range_header(range_header, file_size) {
-            Ok(Some((start, end))) => {
-                info!(
-                    "serving partial content: bytes {}-{}/{}",
-                    start, end, file_size
-                );
-                serve_partial_file(file, start, end, file_size, mime_type).await
+        let range_str = match range_header.to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                warn!("invalid range header encoding");
+                return Response::builder()
+                    .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                    .header(header::CONTENT_RANGE, format!("bytes */{file_size}"))
+                    .body(Body::empty())
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
             }
-            Ok(None) => {
-                // range header present but no valid range, serve full file
-                serve_full_file(file, file_size, mime_type).await
+        };
+
+        match parse_http_range(range_str) {
+            Ok(parsed_ranges) => {
+                match parsed_ranges.validate(file_size) {
+                    Ok(valid_ranges) => {
+                        if valid_ranges.is_empty() {
+                            // no valid ranges, serve full file
+                            serve_full_file(file, file_size, mime_type).await
+                        } else {
+                            // serve first range (we don't support multipart ranges)
+                            let range = &valid_ranges[0];
+                            let start = *range.start();
+                            let end = *range.end();
+                            info!(
+                                "serving partial content: bytes {}-{}/{}",
+                                start, end, file_size
+                            );
+                            serve_partial_file(file, start, end, file_size, mime_type).await
+                        }
+                    }
+                    Err(_) => {
+                        warn!("range not satisfiable after validation");
+                        Response::builder()
+                            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                            .header(header::CONTENT_RANGE, format!("bytes */{file_size}"))
+                            .body(Body::empty())
+                            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+                    }
+                }
             }
-            Err(e) => {
-                warn!("invalid range request: {}", e);
-                // return 416 range not satisfiable
+            Err(_) => {
+                warn!("malformed range header");
                 Response::builder()
                     .status(StatusCode::RANGE_NOT_SATISFIABLE)
                     .header(header::CONTENT_RANGE, format!("bytes */{file_size}"))
@@ -197,75 +225,6 @@ async fn serve_full_file(
             error!("failed to build response: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })
-}
-
-// parse http range header
-// returns Ok(Some((start, end))) for valid range, Ok(None) for no range, Err for invalid
-fn parse_range_header(
-    range_header: &HeaderValue,
-    file_size: u64,
-) -> Result<Option<(u64, u64)>, String> {
-    let range_str = range_header
-        .to_str()
-        .map_err(|_| "invalid range header encoding")?;
-
-    // range header format: "bytes=start-end"
-    if !range_str.starts_with("bytes=") {
-        return Err("range unit must be 'bytes'".to_string());
-    }
-
-    let range_spec = &range_str[6..]; // skip "bytes="
-
-    // handle multiple ranges (not supported for now)
-    if range_spec.contains(',') {
-        return Err("multiple ranges not supported".to_string());
-    }
-
-    // parse single range
-    let parts: Vec<&str> = range_spec.split('-').collect();
-    if parts.len() != 2 {
-        return Err("invalid range format".to_string());
-    }
-
-    let start_str = parts[0].trim();
-    let end_str = parts[1].trim();
-
-    // handle different range formats
-    let (start, end) = if start_str.is_empty() && !end_str.is_empty() {
-        // suffix range: "-500" means last 500 bytes
-        let suffix_len: u64 = end_str.parse().map_err(|_| "invalid suffix length")?;
-        if suffix_len == 0 || suffix_len > file_size {
-            return Err("invalid suffix range".to_string());
-        }
-        (file_size - suffix_len, file_size - 1)
-    } else if !start_str.is_empty() && end_str.is_empty() {
-        // open-ended range: "500-" means from byte 500 to end
-        let start: u64 = start_str.parse().map_err(|_| "invalid range start")?;
-        if start >= file_size {
-            return Err("range start beyond file size".to_string());
-        }
-        (start, file_size - 1)
-    } else if !start_str.is_empty() && !end_str.is_empty() {
-        // closed range: "500-999"
-        let start: u64 = start_str.parse().map_err(|_| "invalid range start")?;
-        let end: u64 = end_str.parse().map_err(|_| "invalid range end")?;
-
-        if start > end {
-            return Err("range start after end".to_string());
-        }
-        if start >= file_size {
-            return Err("range start beyond file size".to_string());
-        }
-
-        // adjust end if it's beyond file size
-        let adjusted_end = if end >= file_size { file_size - 1 } else { end };
-
-        (start, adjusted_end)
-    } else {
-        return Ok(None); // empty range
-    };
-
-    Ok(Some((start, end)))
 }
 
 // handle requests for directories

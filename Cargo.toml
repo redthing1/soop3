@@ -1,6 +1,6 @@
 [package]
 name = "soop3"
-version = "0.11.0"
+version = "0.11.1"
 edition = "2024"
 authors = ["redthing1"]
 description = "the based http fileserver (rust port)"
@@ -30,7 +30,11 @@ figment = { version = "0.10", features = ["toml", "env"] }
 anyhow = "1.0"
 thiserror = "2.0"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-subscriber = { version = "0.3", features = [
+    "env-filter",
+    "fmt",
+    "json",
+] }
 
 # file operations and utilities
 walkdir = "2.0"
@@ -49,6 +53,7 @@ bytes = "1.0"
 http = "1.0"
 hyper = { version = "1.0", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
+http-range-header = "0.4.2"
 
 [dev-dependencies]
 tempfile = "3.0"
@@ -63,10 +68,10 @@ tower-test = "0.4"
 # harness = false
 
 [profile.release]
-lto = true              # link-time optimization
-codegen-units = 1       # better optimization
-panic = "abort"         # smaller binary size
-strip = true            # remove debug symbols
+lto = true        # link-time optimization
+codegen-units = 1 # better optimization
+panic = "abort"   # smaller binary size
+strip = true      # remove debug symbols
 
 [profile.dev]
 # faster compilation during development
