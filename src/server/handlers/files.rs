@@ -3,11 +3,12 @@
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::Response,
 };
 use std::path::{Path as StdPath, PathBuf};
 use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -22,17 +23,21 @@ use crate::utils::{
     paths::join_path_jailed,
 };
 
-/// handle root directory request
-#[instrument(skip(state))]
-pub async fn handle_root_request(State(state): State<AppState>) -> Result<Response, StatusCode> {
-    handle_request_internal(state, "/".to_string()).await
+// handle root directory request
+#[instrument(skip(state, headers))]
+pub async fn handle_root_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    handle_request_internal(state, "/".to_string(), headers).await
 }
 
-/// main request handler - routes to file or directory handling  
-#[instrument(skip(state), fields(path = %file_path))]
+// main request handler - routes to file or directory handling
+#[instrument(skip(state, headers), fields(path = %file_path))]
 pub async fn handle_request(
     State(state): State<AppState>,
     Path(file_path): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
     // ensure path starts with / for consistency
     let normalized_path = if file_path.starts_with('/') {
@@ -40,13 +45,14 @@ pub async fn handle_request(
     } else {
         format!("/{file_path}")
     };
-    handle_request_internal(state, normalized_path).await
+    handle_request_internal(state, normalized_path, headers).await
 }
 
-/// internal request handling logic
+// internal request handling logic
 async fn handle_request_internal(
     state: AppState,
     file_path: String,
+    headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
     info!("processing GET request");
 
@@ -76,12 +82,15 @@ async fn handle_request_internal(
     if resolved_path.is_dir() {
         handle_directory_request(state, resolved_path, file_path).await
     } else {
-        handle_file_request(resolved_path).await
+        handle_file_request(resolved_path, headers).await
     }
 }
 
-/// handle requests for files
-async fn handle_file_request(file_path: PathBuf) -> Result<Response, StatusCode> {
+// handle requests for files with range support
+async fn handle_file_request(
+    file_path: PathBuf,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
     info!("serving file: {}", file_path.display());
 
     // open file
@@ -96,17 +105,93 @@ async fn handle_file_request(file_path: PathBuf) -> Result<Response, StatusCode>
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    // determine mime type
+    let file_size = metadata.len();
     let mime_type = get_mime_type(&file_path);
 
-    // create streaming response
+    // check for range header
+    if let Some(range_header) = headers.get(header::RANGE) {
+        // parse range header
+        match parse_range_header(range_header, file_size) {
+            Ok(Some((start, end))) => {
+                info!(
+                    "serving partial content: bytes {}-{}/{}",
+                    start, end, file_size
+                );
+                serve_partial_file(file, start, end, file_size, mime_type).await
+            }
+            Ok(None) => {
+                // range header present but no valid range, serve full file
+                serve_full_file(file, file_size, mime_type).await
+            }
+            Err(e) => {
+                warn!("invalid range request: {}", e);
+                // return 416 range not satisfiable
+                Response::builder()
+                    .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                    .header(header::CONTENT_RANGE, format!("bytes */{file_size}"))
+                    .body(Body::empty())
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        }
+    } else {
+        // no range header, serve full file
+        serve_full_file(file, file_size, mime_type).await
+    }
+}
+
+// serve partial content for range requests
+async fn serve_partial_file(
+    mut file: File,
+    start: u64,
+    end: u64,
+    file_size: u64,
+    mime_type: String,
+) -> Result<Response, StatusCode> {
+    // seek to start position
+    file.seek(tokio::io::SeekFrom::Start(start))
+        .await
+        .map_err(|e| {
+            error!("failed to seek file: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // create limited stream for the range
+    let take_bytes = end - start + 1;
+    let limited_file = file.take(take_bytes);
+    let stream = ReaderStream::new(limited_file);
+    let body = Body::from_stream(stream);
+
+    // build partial content response
+    Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(header::CONTENT_TYPE, mime_type)
+        .header(header::CONTENT_LENGTH, take_bytes)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{file_size}"),
+        )
+        .body(body)
+        .map_err(|e| {
+            error!("failed to build partial response: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
+// serve the complete file
+async fn serve_full_file(
+    file: File,
+    file_size: u64,
+    mime_type: String,
+) -> Result<Response, StatusCode> {
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, mime_type)
-        .header(header::CONTENT_LENGTH, metadata.len())
+        .header(header::CONTENT_LENGTH, file_size)
+        .header(header::ACCEPT_RANGES, "bytes")
         .body(body)
         .map_err(|e| {
             error!("failed to build response: {}", e);
@@ -114,7 +199,76 @@ async fn handle_file_request(file_path: PathBuf) -> Result<Response, StatusCode>
         })
 }
 
-/// handle requests for directories
+// parse http range header
+// returns Ok(Some((start, end))) for valid range, Ok(None) for no range, Err for invalid
+fn parse_range_header(
+    range_header: &HeaderValue,
+    file_size: u64,
+) -> Result<Option<(u64, u64)>, String> {
+    let range_str = range_header
+        .to_str()
+        .map_err(|_| "invalid range header encoding")?;
+
+    // range header format: "bytes=start-end"
+    if !range_str.starts_with("bytes=") {
+        return Err("range unit must be 'bytes'".to_string());
+    }
+
+    let range_spec = &range_str[6..]; // skip "bytes="
+
+    // handle multiple ranges (not supported for now)
+    if range_spec.contains(',') {
+        return Err("multiple ranges not supported".to_string());
+    }
+
+    // parse single range
+    let parts: Vec<&str> = range_spec.split('-').collect();
+    if parts.len() != 2 {
+        return Err("invalid range format".to_string());
+    }
+
+    let start_str = parts[0].trim();
+    let end_str = parts[1].trim();
+
+    // handle different range formats
+    let (start, end) = if start_str.is_empty() && !end_str.is_empty() {
+        // suffix range: "-500" means last 500 bytes
+        let suffix_len: u64 = end_str.parse().map_err(|_| "invalid suffix length")?;
+        if suffix_len == 0 || suffix_len > file_size {
+            return Err("invalid suffix range".to_string());
+        }
+        (file_size - suffix_len, file_size - 1)
+    } else if !start_str.is_empty() && end_str.is_empty() {
+        // open-ended range: "500-" means from byte 500 to end
+        let start: u64 = start_str.parse().map_err(|_| "invalid range start")?;
+        if start >= file_size {
+            return Err("range start beyond file size".to_string());
+        }
+        (start, file_size - 1)
+    } else if !start_str.is_empty() && !end_str.is_empty() {
+        // closed range: "500-999"
+        let start: u64 = start_str.parse().map_err(|_| "invalid range start")?;
+        let end: u64 = end_str.parse().map_err(|_| "invalid range end")?;
+
+        if start > end {
+            return Err("range start after end".to_string());
+        }
+        if start >= file_size {
+            return Err("range start beyond file size".to_string());
+        }
+
+        // adjust end if it's beyond file size
+        let adjusted_end = if end >= file_size { file_size - 1 } else { end };
+
+        (start, adjusted_end)
+    } else {
+        return Ok(None); // empty range
+    };
+
+    Ok(Some((start, end)))
+}
+
+// handle requests for directories
 async fn handle_directory_request(
     state: AppState,
     dir_path: PathBuf,
@@ -136,7 +290,7 @@ async fn handle_directory_request(
         let index_path = dir_path.join(index_file);
         if index_path.exists() && index_path.is_file() {
             info!("serving index file: {}", index_path.display());
-            return handle_file_request(index_path).await;
+            return handle_file_request(index_path, HeaderMap::new()).await;
         }
     }
 
@@ -145,7 +299,7 @@ async fn handle_directory_request(
     generate_directory_listing(&state, &dir_path, &request_path).await
 }
 
-/// generate html directory listing
+// generate html directory listing
 async fn generate_directory_listing(
     state: &AppState,
     dir_path: &StdPath,
@@ -195,7 +349,7 @@ async fn generate_directory_listing(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-/// build the html content for directory listing
+// build the html content for directory listing
 fn build_listing_html(
     entries: &[DirectoryEntry],
     request_path: &str,
@@ -254,9 +408,9 @@ fn build_listing_html(
         };
 
         let entry_path = if request_path.ends_with('/') {
-            format!("{}{}", request_path, entry.name)
+            format!("{request_path}{}", entry.name)
         } else {
-            format!("{}/{}", request_path, entry.name)
+            format!("{request_path}/{}", entry.name)
         };
 
         // add trailing slash for directories to avoid redirect
@@ -286,9 +440,7 @@ fn build_listing_html(
     Ok(html)
 }
 
-// favicon handling moved to assets module
-
-/// safely resolve a request path relative to the public directory
+// safely resolve a request path relative to the public directory
 fn resolve_safe_path(
     public_dir: &std::path::Path,
     request_path: &str,
