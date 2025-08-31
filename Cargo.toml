@@ -1,6 +1,6 @@
 [package]
 name = "soop3"
-version = "0.12.0"
+version = "0.12.1"
 edition = "2024"
 authors = ["redthing1"]
 description = "the based http fileserver (rust port)"
@@ -16,14 +16,14 @@ test-helpers = []
 [dependencies]
 # web server foundation
 axum = { version = "0.8", features = ["multipart", "tower-log"] }
-tokio = { version = "1.45", features = ["full"] }
+tokio = { version = "1.47", features = ["full"] }
 tower = { version = "0.5", features = ["full"] }
 tower-http = { version = "0.6", features = ["fs", "trace", "auth"] }
 
 # configuration and cli
 clap = { version = "4.5", features = ["derive", "env"] }
 serde = { version = "1.0", features = ["derive"] }
-toml = "0.8"
+toml = "0.9"
 figment = { version = "0.10", features = ["toml", "env"] }
 
 # error handling and logging
@@ -58,7 +58,7 @@ http-range-header = "0.4.2"
 [dev-dependencies]
 tempfile = "3.0"
 tokio-test = "0.4"
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.7", features = ["html_reports"] }
 tower-test = "0.4"
 
 
