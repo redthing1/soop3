@@ -29,6 +29,7 @@ async fn test_file_serving() {
             port: 8000,
             enable_upload: false,
             upload_dir: None,
+            cors_origins: vec![],
         },
         security: SecurityConfig {
             policy: SecurityPolicy::AuthenticateNone,
@@ -533,4 +534,229 @@ async fn test_ignore_file_functionality() {
     assert!(!body_str.contains("debug.log"));
     assert!(!body_str.contains("temp_file"));
     assert!(!body_str.contains("build"));
+}
+
+#[tokio::test]
+async fn test_cors_functionality() {
+    let temp_dir = TempDir::new().unwrap();
+    let public_dir = temp_dir.path();
+
+    fs::write(public_dir.join("test.txt"), "content").unwrap();
+
+    // test CORS with specific allowed origins
+    let config = AppConfig {
+        server: ServerConfig {
+            public_dir: public_dir.to_path_buf(),
+            cors_origins: vec![
+                "http://localhost:3000".to_string(),
+                "https://example.com".to_string(),
+            ],
+            ..Default::default()
+        },
+        security: SecurityConfig {
+            policy: SecurityPolicy::AuthenticateNone,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let app = create_test_app(config);
+
+    // test preflight request with allowed origin
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/test.txt")
+                .header("Origin", "http://localhost:3000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(
+        headers.get("Access-Control-Allow-Origin").unwrap(),
+        "http://localhost:3000"
+    );
+    assert!(headers.contains_key("Access-Control-Allow-Methods"));
+    assert!(headers.contains_key("Access-Control-Allow-Headers"));
+
+    // test preflight request with disallowed origin
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/test.txt")
+                .header("Origin", "http://evil.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // test regular request with allowed origin
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/test.txt")
+                .header("Origin", "https://example.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(
+        headers.get("Access-Control-Allow-Origin").unwrap(),
+        "https://example.com"
+    );
+
+    // test regular request with disallowed origin (should work but no CORS headers)
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/test.txt")
+                .header("Origin", "http://evil.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert!(!headers.contains_key("Access-Control-Allow-Origin"));
+}
+
+#[tokio::test]
+async fn test_cors_wildcard() {
+    let temp_dir = TempDir::new().unwrap();
+    let public_dir = temp_dir.path();
+
+    fs::write(public_dir.join("test.txt"), "content").unwrap();
+
+    // test CORS with wildcard (allow all)
+    let config = AppConfig {
+        server: ServerConfig {
+            public_dir: public_dir.to_path_buf(),
+            cors_origins: vec!["*".to_string()],
+            ..Default::default()
+        },
+        security: SecurityConfig {
+            policy: SecurityPolicy::AuthenticateNone,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let app = create_test_app(config);
+
+    // test with any origin should work
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/test.txt")
+                .header("Origin", "http://any-domain.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(
+        headers.get("Access-Control-Allow-Origin").unwrap(),
+        "http://any-domain.com"
+    );
+
+    // test regular request
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/test.txt")
+                .header("Origin", "http://another-domain.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(
+        headers.get("Access-Control-Allow-Origin").unwrap(),
+        "http://another-domain.com"
+    );
+}
+
+#[tokio::test]
+async fn test_cors_disabled() {
+    let temp_dir = TempDir::new().unwrap();
+    let public_dir = temp_dir.path();
+
+    fs::write(public_dir.join("test.txt"), "content").unwrap();
+
+    // test with no CORS origins configured (default behavior)
+    let config = AppConfig {
+        server: ServerConfig {
+            public_dir: public_dir.to_path_buf(),
+            cors_origins: vec![], // empty = CORS disabled
+            ..Default::default()
+        },
+        security: SecurityConfig {
+            policy: SecurityPolicy::AuthenticateNone,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let app = create_test_app(config);
+
+    // test preflight request should work normally (no CORS handling)
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/test.txt")
+                .header("Origin", "http://localhost:3000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // OPTIONS should be handled by normal route handlers
+    let headers = response.headers();
+    assert!(!headers.contains_key("Access-Control-Allow-Origin"));
+
+    // test regular request should work normally (no CORS headers)
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/test.txt")
+                .header("Origin", "http://localhost:3000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert!(!headers.contains_key("Access-Control-Allow-Origin"));
 }

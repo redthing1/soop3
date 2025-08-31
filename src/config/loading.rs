@@ -48,6 +48,7 @@ fn cli_overrides(cli: &Cli) -> Serialized<ServerConfig> {
         public_dir: cli.public_dir.clone(),
         upload_dir: None, // cli doesn't override upload_dir
         enable_upload: cli.enable_upload,
+        cors_origins: cli.cors.clone(),
     };
 
     Serialized::defaults(server_overrides).key("server")
@@ -127,6 +128,7 @@ mod tests {
             config_file: None,
             verbose: 0,
             quiet: 0,
+            cors: vec![],
         };
 
         let config = load_configuration(&cli).unwrap();
@@ -163,6 +165,7 @@ prepend_timestamp = false
             config_file: Some(config_path),
             verbose: 0,
             quiet: 0,
+            cors: vec![],
         };
 
         let config = load_configuration(&cli).unwrap();

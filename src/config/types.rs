@@ -36,6 +36,10 @@ pub struct Cli {
     /// decrease verbosity (-q, -qq)
     #[arg(short = 'q', long, action = clap::ArgAction::Count)]
     pub quiet: u8,
+
+    /// allowed CORS origins (repeatable, use "*" for all)
+    #[arg(long)]
+    pub cors: Vec<String>,
 }
 
 /// complete application configuration
@@ -55,6 +59,8 @@ pub struct ServerConfig {
     pub public_dir: PathBuf,
     pub upload_dir: Option<PathBuf>,
     pub enable_upload: bool,
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
 }
 
 /// security and authentication configuration
@@ -129,6 +135,7 @@ impl Default for ServerConfig {
             public_dir: PathBuf::from("."),
             upload_dir: None,
             enable_upload: false,
+            cors_origins: Vec::new(),
         }
     }
 }

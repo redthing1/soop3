@@ -17,7 +17,9 @@ use super::{
         files::{handle_request, handle_root_request},
         upload::{handle_root_upload_request, handle_upload_request},
     },
-    middleware::{auth::authenticate_if_required, security::add_security_headers},
+    middleware::{
+        auth::authenticate_if_required, cors::handle_cors, security::add_security_headers,
+    },
 };
 use crate::config::AppConfig;
 
@@ -69,6 +71,10 @@ fn create_app_impl(config: AppConfig, validate: bool) -> Router {
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
+                .layer(middleware::from_fn_with_state(
+                    app_state.clone(),
+                    handle_cors,
+                ))
                 .layer(middleware::from_fn(add_security_headers)),
         )
         .layer(middleware::from_fn_with_state(

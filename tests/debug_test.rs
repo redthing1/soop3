@@ -28,6 +28,7 @@ async fn debug_simple_request() {
             port: 8000,
             enable_upload: false,
             upload_dir: None,
+            cors_origins: vec![],
         },
         security: SecurityConfig {
             username: None,
