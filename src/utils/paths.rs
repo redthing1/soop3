@@ -1,6 +1,6 @@
 // path operations and security functions
 
-use percent_encoding::percent_decode_str;
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
@@ -12,6 +12,9 @@ pub enum PathTraversalError {
     #[error("invalid target path")]
     InvalidTargetPath,
 
+    #[error("encoded slash not allowed in path")]
+    EncodedSlash,
+
     #[error("path outside jail: base={base:?}, target={target:?}")]
     OutsideJail { base: PathBuf, target: PathBuf },
 
@@ -22,80 +25,118 @@ pub enum PathTraversalError {
     WindowsPrefix,
 }
 
+const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}')
+    .add(b'\\');
+
+/// percent-encode each path segment for use in URL paths
+pub fn encode_path_segments(path: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+
+    let mut encoded = String::new();
+    for (index, segment) in path.split('/').enumerate() {
+        if index > 0 {
+            encoded.push('/');
+        }
+        if segment.is_empty() {
+            continue;
+        }
+        encoded.push_str(&utf8_percent_encode(segment, PATH_SEGMENT_ENCODE_SET).to_string());
+    }
+
+    encoded
+}
+
 /// safely join a path component to a base directory, preventing traversal attacks
 /// this is the core security function that prevents directory traversal
 pub fn join_path_jailed(base_dir: &Path, component: &str) -> Result<PathBuf, PathTraversalError> {
-    // normalize component to prevent traversal
+    join_path_jailed_follow_parents(base_dir, component)
+}
+
+/// resolve a jailed path while following symlinks in existing parent directories
+pub fn join_path_jailed_follow_parents(
+    base_dir: &Path,
+    component: &str,
+) -> Result<PathBuf, PathTraversalError> {
     let normalized = normalize_path_component(component)?;
-
-    // join paths
-    let joined = base_dir.join(normalized);
-
-    // canonicalize base directory first
     let canonical_base = base_dir
         .canonicalize()
         .map_err(|_| PathTraversalError::InvalidBasePath)?;
 
-    // try to canonicalize joined path, if it fails manually resolve it
-    let canonical_joined = if joined.exists() {
-        joined
-            .canonicalize()
-            .map_err(|_| PathTraversalError::InvalidTargetPath)?
-    } else {
-        // file doesn't exist yet, resolve manually by normalizing path components
-        let relative_path = joined
-            .strip_prefix(base_dir)
-            .map_err(|_| PathTraversalError::InvalidTargetPath)?;
+    let mut current = canonical_base.clone();
 
-        // normalize the relative path by resolving . and .. components
-        let mut normalized_components = Vec::new();
-        for component in relative_path.components() {
-            match component {
-                Component::Normal(name) => normalized_components.push(name),
-                Component::ParentDir => {
-                    if normalized_components.is_empty() {
-                        // trying to go above the base directory
+    for component in normalized.components() {
+        match component {
+            Component::Normal(name) => {
+                let candidate = current.join(name);
+                if candidate.exists() {
+                    let canonical_candidate = candidate
+                        .canonicalize()
+                        .map_err(|_| PathTraversalError::InvalidTargetPath)?;
+                    if !canonical_candidate.starts_with(&canonical_base) {
                         return Err(PathTraversalError::OutsideJail {
-                            base: canonical_base.clone(),
-                            target: joined,
+                            base: canonical_base,
+                            target: canonical_candidate,
                         });
                     }
-                    normalized_components.pop();
-                }
-                Component::CurDir => {
-                    // ignore current directory references
-                }
-                _ => {
-                    return Err(PathTraversalError::InvalidTargetPath);
+                    current = canonical_candidate;
+                } else {
+                    current = candidate;
                 }
             }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !current.pop() || !current.starts_with(&canonical_base) {
+                    return Err(PathTraversalError::OutsideJail {
+                        base: canonical_base,
+                        target: current,
+                    });
+                }
+            }
+            Component::RootDir => {
+                return Err(PathTraversalError::InvalidTargetPath);
+            }
+            Component::Prefix(_) => {
+                return Err(PathTraversalError::WindowsPrefix);
+            }
         }
+    }
 
-        // rebuild the path from canonical base
-        let mut result = canonical_base.clone();
-        for component in normalized_components {
-            result.push(component);
-        }
-        result
-    };
-
-    // ensure result is within jail boundaries
-    if !canonical_joined.starts_with(&canonical_base) {
+    if !current.starts_with(&canonical_base) {
         return Err(PathTraversalError::OutsideJail {
             base: canonical_base,
-            target: canonical_joined,
+            target: current,
         });
     }
 
-    Ok(canonical_joined)
+    Ok(current)
 }
 
 /// normalize a path component by url-decoding and cleaning up dangerous elements
 fn normalize_path_component(component: &str) -> Result<PathBuf, PathTraversalError> {
+    if contains_encoded_slash(component) {
+        return Err(PathTraversalError::EncodedSlash);
+    }
+
     // url decode the component
     let decoded = percent_decode_str(component)
         .decode_utf8()
         .map_err(|_| PathTraversalError::InvalidEncoding)?;
+
+    if decoded.contains('\0') {
+        return Err(PathTraversalError::InvalidEncoding);
+    }
 
     // build normalized path from components
     let mut normalized = PathBuf::new();
@@ -109,8 +150,7 @@ fn normalize_path_component(component: &str) -> Result<PathBuf, PathTraversalErr
                 normalized.push("..");
             }
             Component::RootDir => {
-                // start fresh from root
-                normalized = PathBuf::from("/");
+                return Err(PathTraversalError::InvalidTargetPath);
             }
             Component::Prefix(_) => {
                 // windows drive prefixes not allowed
@@ -120,6 +160,22 @@ fn normalize_path_component(component: &str) -> Result<PathBuf, PathTraversalErr
     }
 
     Ok(normalized)
+}
+
+fn contains_encoded_slash(component: &str) -> bool {
+    let bytes = component.as_bytes();
+    let mut index = 0;
+    while index + 2 < bytes.len() {
+        if bytes[index] == b'%' {
+            let first = bytes[index + 1].to_ascii_lowercase();
+            let second = bytes[index + 2].to_ascii_lowercase();
+            if first == b'2' && second == b'f' {
+                return true;
+            }
+        }
+        index += 1;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -173,5 +229,15 @@ mod tests {
         // url encoding should be handled
         let result = normalize_path_component("file%20with%20spaces.txt").unwrap();
         assert_eq!(result, PathBuf::from("file with spaces.txt"));
+    }
+
+    #[test]
+    fn test_encode_path_segments() {
+        assert_eq!(
+            encode_path_segments("/file with spaces.txt"),
+            "/file%20with%20spaces.txt"
+        );
+        assert_eq!(encode_path_segments("/dir/file#1.txt"), "/dir/file%231.txt");
+        assert_eq!(encode_path_segments("/"), "/");
     }
 }

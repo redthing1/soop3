@@ -3,7 +3,7 @@
 use axum::{
     body::Body,
     extract::{Request, State},
-    http::{HeaderValue, Method, Response, StatusCode},
+    http::{HeaderValue, Method, Response, StatusCode, header},
     middleware::Next,
 };
 use tracing::debug;
@@ -23,40 +23,48 @@ pub async fn handle_cors(
         return next.run(request).await;
     }
 
-    let origin = request
+    let origin_header = request.headers().get(header::ORIGIN).cloned();
+    let origin = origin_header.as_ref().and_then(|value| value.to_str().ok());
+    let requested_headers = request
         .headers()
-        .get("origin")
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string());
+        .get(header::ACCESS_CONTROL_REQUEST_HEADERS)
+        .cloned();
 
     // check if origin is allowed
-    let allowed = origin.as_ref().is_some_and(|origin| {
-        cors_origins.contains(&"*".to_string()) || cors_origins.contains(origin)
-    });
+    let allowed = match origin {
+        Some(origin) => cors_origins
+            .iter()
+            .any(|allowed| allowed == "*" || allowed == origin),
+        None => false,
+    };
 
     // handle preflight OPTIONS request
     if request.method() == Method::OPTIONS {
+        let mut response = Response::new(Body::empty());
         if allowed {
-            let mut response = Response::builder()
-                .status(StatusCode::OK)
-                .body(Body::empty())
-                .unwrap();
-
-            add_cors_headers(response.headers_mut(), origin.as_deref());
-            return response;
+            *response.status_mut() = StatusCode::OK;
+            add_cors_headers(
+                response.headers_mut(),
+                origin_header.as_ref(),
+                requested_headers.as_ref(),
+                true,
+            );
         } else {
-            return Response::builder()
-                .status(StatusCode::FORBIDDEN)
-                .body(Body::empty())
-                .unwrap();
+            *response.status_mut() = StatusCode::FORBIDDEN;
         }
+        return response;
     }
 
     // for non-preflight requests, add CORS headers if origin is allowed
     let mut response = next.run(request).await;
 
     if allowed {
-        add_cors_headers(response.headers_mut(), origin.as_deref());
+        add_cors_headers(
+            response.headers_mut(),
+            origin_header.as_ref(),
+            requested_headers.as_ref(),
+            false,
+        );
         debug!("CORS headers added for origin: {:?}", origin);
     }
 
@@ -64,23 +72,35 @@ pub async fn handle_cors(
 }
 
 /// add CORS headers to response
-fn add_cors_headers(headers: &mut axum::http::HeaderMap, origin: Option<&str>) {
+fn add_cors_headers(
+    headers: &mut axum::http::HeaderMap,
+    origin: Option<&HeaderValue>,
+    requested_headers: Option<&HeaderValue>,
+    preflight: bool,
+) {
     if let Some(origin) = origin {
-        headers.insert(
-            "Access-Control-Allow-Origin",
-            HeaderValue::from_str(origin).unwrap(),
-        );
+        headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.clone());
+        headers.insert(header::VARY, HeaderValue::from_static("Origin"));
     }
 
-    headers.insert(
-        "Access-Control-Allow-Methods",
-        HeaderValue::from_static("GET, POST, OPTIONS"),
-    );
+    if preflight {
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("GET, HEAD, POST, OPTIONS"),
+        );
 
-    headers.insert(
-        "Access-Control-Allow-Headers",
-        HeaderValue::from_static("*"),
-    );
+        if let Some(value) = requested_headers {
+            headers.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, value.clone());
+        } else {
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_HEADERS,
+                HeaderValue::from_static("*"),
+            );
+        }
 
-    headers.insert("Access-Control-Max-Age", HeaderValue::from_static("3600"));
+        headers.insert(
+            header::ACCESS_CONTROL_MAX_AGE,
+            HeaderValue::from_static("3600"),
+        );
+    }
 }

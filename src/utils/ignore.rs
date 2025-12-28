@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tracing::warn;
 
 /// convert a simple glob pattern to a regex string
 /// supports * (any chars) and ? (single char) like soop2
@@ -56,14 +57,19 @@ pub fn is_path_ignored(rel_path: &str, patterns: &[Regex]) -> bool {
 
 /// filter directory entries using ignore patterns
 pub fn filter_with_ignore_patterns(
-    entries: Vec<super::files::DirectoryEntry>,
+    entries: &[super::files::DirectoryEntry],
     base_dir: &Path,
+    dir_path: &Path,
     ignore_file: Option<&PathBuf>,
 ) -> Result<Vec<super::files::DirectoryEntry>> {
+    let canonical_base = base_dir
+        .canonicalize()
+        .unwrap_or_else(|_| base_dir.to_path_buf());
+
     // if no ignore file specified, return all entries
     let ignore_file = match ignore_file {
         Some(file) => file,
-        None => return Ok(entries),
+        None => return Ok(entries.to_vec()),
     };
 
     // resolve ignore file path relative to base directory
@@ -74,20 +80,41 @@ pub fn filter_with_ignore_patterns(
     };
 
     // if ignore file doesn't exist, return all entries (silent like soop2)
-    if !ignore_path.exists() {
-        return Ok(entries);
+    match fs::metadata(&ignore_path) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(entries.to_vec());
+        }
+        Err(err) => {
+            warn!(
+                "failed to read ignore file metadata for {}: {}",
+                ignore_path.display(),
+                err
+            );
+            return Ok(entries.to_vec());
+        }
     }
 
     // read ignore patterns
-    let patterns = read_ignore_patterns(&ignore_path)?;
+    let patterns = match read_ignore_patterns(&ignore_path) {
+        Ok(patterns) => patterns,
+        Err(err) => {
+            warn!(
+                "failed to read ignore patterns from {}: {}",
+                ignore_path.display(),
+                err
+            );
+            return Ok(entries.to_vec());
+        }
+    };
 
     // filter entries
     let filtered: Vec<_> = entries
-        .into_iter()
+        .iter()
         .filter(|entry| {
             // create relative path from base_dir like soop2 does
-            let entry_path = base_dir.join(&entry.name);
-            let rel_path = match entry_path.strip_prefix(base_dir) {
+            let entry_path = dir_path.join(&entry.name);
+            let rel_path = match entry_path.strip_prefix(&canonical_base) {
                 Ok(path) => path.to_string_lossy().to_string(),
                 Err(_) => entry.name.clone(), // fallback to just the name
             };
@@ -95,6 +122,7 @@ pub fn filter_with_ignore_patterns(
             // check if path should be ignored
             !is_path_ignored(&rel_path, &patterns)
         })
+        .cloned()
         .collect();
 
     Ok(filtered)
@@ -154,6 +182,7 @@ mod tests {
     fn test_filtering_directory_entries() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
+        let dir_path = base_dir;
 
         // create ignore file
         let ignore_file = base_dir.join(".gitignore");
@@ -187,11 +216,52 @@ mod tests {
             },
         ];
 
-        let filtered =
-            filter_with_ignore_patterns(entries, base_dir, Some(&PathBuf::from(".gitignore")))
-                .unwrap();
+        let filtered = filter_with_ignore_patterns(
+            &entries,
+            base_dir,
+            dir_path,
+            Some(&PathBuf::from(".gitignore")),
+        )
+        .unwrap();
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "source.rs");
+    }
+
+    #[test]
+    fn test_filtering_returns_entries_on_ignore_read_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+        let dir_path = base_dir;
+
+        let ignore_dir = base_dir.join("ignore_dir");
+        fs::create_dir(&ignore_dir).unwrap();
+
+        let entries = vec![
+            super::super::files::DirectoryEntry {
+                name: "source.rs".to_string(),
+                size: 1000,
+                modified: std::time::SystemTime::UNIX_EPOCH,
+                is_dir: false,
+            },
+            super::super::files::DirectoryEntry {
+                name: "debug.log".to_string(),
+                size: 500,
+                modified: std::time::SystemTime::UNIX_EPOCH,
+                is_dir: false,
+            },
+        ];
+
+        let filtered = filter_with_ignore_patterns(
+            &entries,
+            base_dir,
+            dir_path,
+            Some(&PathBuf::from("ignore_dir")),
+        )
+        .unwrap();
+
+        assert_eq!(filtered.len(), entries.len());
+        assert_eq!(filtered[0].name, "source.rs");
+        assert_eq!(filtered[1].name, "debug.log");
     }
 }

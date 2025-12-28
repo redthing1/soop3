@@ -2,51 +2,39 @@
 
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{OriginalUri, State},
     http::{HeaderMap, StatusCode, header},
     response::Response,
 };
 use http_range_header::parse_range_header as parse_http_range;
+use std::io::ErrorKind;
 use std::path::{Path as StdPath, PathBuf};
-use tokio::fs::File;
+use tokio::fs::{self as tokio_fs, File};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::assets::serve_embedded_favicon;
-use crate::server::app::AppState;
-use crate::utils::{
-    files::{
-        DirectoryEntry, collect_directory_entries, escape_html, format_file_size, format_timestamp,
-        get_mime_type,
-    },
-    ignore::filter_with_ignore_patterns,
-    paths::join_path_jailed,
-};
+use crate::server::{app::AppState, fs, listing};
 
 // handle root directory request
-#[instrument(skip(state, headers))]
+#[instrument(skip(state, headers, uri))]
 pub async fn handle_root_request(
     State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
-    handle_request_internal(state, "/".to_string(), headers).await
+    handle_request_internal(state, uri.path().to_string(), headers).await
 }
 
 // main request handler - routes to file or directory handling
-#[instrument(skip(state, headers), fields(path = %file_path))]
+#[instrument(skip(state, headers, uri))]
 pub async fn handle_request(
     State(state): State<AppState>,
-    Path(file_path): Path<String>,
+    OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
-    // ensure path starts with / for consistency
-    let normalized_path = if file_path.starts_with('/') {
-        file_path
-    } else {
-        format!("/{file_path}")
-    };
-    handle_request_internal(state, normalized_path, headers).await
+    handle_request_internal(state, uri.path().to_string(), headers).await
 }
 
 // internal request handling logic
@@ -58,7 +46,8 @@ async fn handle_request_internal(
     info!("processing GET request");
 
     // validate and resolve path securely
-    let resolved_path = match resolve_safe_path(&state.config.server.public_dir, &file_path) {
+    let resolved_path = match fs::resolve_request_path(&state.config.server.public_dir, &file_path)
+    {
         Ok(path) => path,
         Err(e) => {
             warn!("rejecting request with bad path: {} - {}", file_path, e);
@@ -68,19 +57,32 @@ async fn handle_request_internal(
 
     debug!("resolved path: {}", resolved_path.display());
 
+    let metadata = match tokio_fs::metadata(&resolved_path).await {
+        Ok(metadata) => Some(metadata),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            error!(
+                "failed to read metadata for {}: {}",
+                resolved_path.display(),
+                err
+            );
+            return Err(map_io_error(&err));
+        }
+    };
+
     // special case: favicon.ico
-    if file_path.ends_with("/favicon.ico") && !resolved_path.exists() {
+    if file_path.ends_with("/favicon.ico") && metadata.is_none() {
         info!("serving embedded favicon.ico");
         return serve_embedded_favicon().await;
     }
 
     // check if path exists
-    if !resolved_path.exists() {
+    let Some(metadata) = metadata else {
         error!("path does not exist: {}", resolved_path.display());
         return Err(StatusCode::NOT_FOUND);
-    }
+    };
 
-    if resolved_path.is_dir() {
+    if metadata.is_dir() {
         handle_directory_request(state, resolved_path, file_path).await
     } else {
         handle_file_request(resolved_path, headers).await
@@ -94,20 +96,16 @@ async fn handle_file_request(
 ) -> Result<Response, StatusCode> {
     info!("serving file: {}", file_path.display());
 
-    // open file
-    let file = File::open(&file_path).await.map_err(|e| {
-        error!("failed to open file {}: {}", file_path.display(), e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    // get file metadata
-    let metadata = file.metadata().await.map_err(|e| {
-        error!("failed to get file metadata {}: {}", file_path.display(), e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let file_size = metadata.len();
-    let mime_type = get_mime_type(&file_path);
+    let file_meta = match fs::open_file_for_serving(&file_path).await {
+        Ok(meta) => meta,
+        Err(err) => {
+            error!("failed to open file {}: {}", file_path.display(), err);
+            return Err(map_fs_error(&err));
+        }
+    };
+    let file = file_meta.file;
+    let file_size = file_meta.size;
+    let mime_type = file_meta.mime_type;
 
     // check for range header
     if let Some(range_header) = headers.get(header::RANGE) {
@@ -247,9 +245,22 @@ async fn handle_directory_request(
     const INDEX_FILES: &[&str] = &["index.html", "index.htm"];
     for index_file in INDEX_FILES {
         let index_path = dir_path.join(index_file);
-        if index_path.exists() && index_path.is_file() {
-            info!("serving index file: {}", index_path.display());
-            return handle_file_request(index_path, HeaderMap::new()).await;
+        match tokio_fs::metadata(&index_path).await {
+            Ok(metadata) => {
+                if metadata.is_file() {
+                    info!("serving index file: {}", index_path.display());
+                    return handle_file_request(index_path, HeaderMap::new()).await;
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                error!(
+                    "failed to read metadata for {}: {}",
+                    index_path.display(),
+                    err
+                );
+                return Err(map_io_error(&err));
+            }
         }
     }
 
@@ -265,41 +276,19 @@ async fn generate_directory_listing(
     request_path: &str,
 ) -> Result<Response, StatusCode> {
     // collect directory entries
-    let mut entries = collect_directory_entries(dir_path).await.map_err(|e| {
-        error!("failed to read directory {}: {}", dir_path.display(), e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    // apply ignore file filtering if configured
-    entries = match filter_with_ignore_patterns(
-        entries,
+    let mut entries = fs::collect_directory_entries_filtered(
+        dir_path,
         &state.config.server.public_dir,
         state.config.listing.ignore_file.as_ref(),
-    ) {
-        Ok(filtered) => filtered,
-        Err(e) => {
-            warn!(
-                "ignore file filtering failed: {}, continuing without filtering",
-                e
-            );
-            // we've already moved entries, so recreate the list
-            collect_directory_entries(dir_path).await.map_err(|e| {
-                error!("failed to re-read directory {}: {}", dir_path.display(), e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?
-        }
-    };
+    )
+    .await
+    .map_err(|err| {
+        error!("failed to read directory {}: {}", dir_path.display(), err);
+        map_fs_error(&err)
+    })?;
 
-    // sort entries (directories first, then alphabetical)
-    let mut sorted_entries = entries;
-    sorted_entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        _ => a.name.cmp(&b.name),
-    });
-
-    // generate html
-    let html = build_listing_html(&sorted_entries, request_path)?;
+    listing::sort_entries(&mut entries);
+    let html = listing::build_listing_html(&entries, request_path);
 
     Response::builder()
         .status(StatusCode::OK)
@@ -308,105 +297,17 @@ async fn generate_directory_listing(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-// build the html content for directory listing
-fn build_listing_html(
-    entries: &[DirectoryEntry],
-    request_path: &str,
-) -> Result<String, StatusCode> {
-    let mut html = String::new();
-
-    // html document structure
-    html.push_str("<!DOCTYPE html>");
-    html.push_str("<html><head>");
-    html.push_str("<meta charset=\"utf-8\">");
-    html.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
-    html.push_str(&format!(
-        "<meta name=\"generator\" content=\"soop3 v{}\">",
-        env!("CARGO_PKG_VERSION")
-    ));
-    html.push_str("<link rel=\"icon\" href=\"/__soop_static/icon.svg\">");
-    html.push_str(&format!(
-        "<title>soop3 | {}</title>",
-        escape_html(request_path)
-    ));
-    html.push_str("<link rel=\"stylesheet\" href=\"/__soop_static/style.css\">");
-    html.push_str("</head><body>");
-
-    // content structure
-    html.push_str("<div class=\"wrapper\">");
-    html.push_str("<main>");
-    html.push_str(
-        "<a href=\"/\"><img src=\"/__soop_static/icon.svg\" alt=\"logo\" class=\"logo-icon\"></a>",
-    );
-    html.push_str(&format!(
-        "<h1 class=\"index-info\">Index of <code>{}</code></h1>",
-        escape_html(request_path)
-    ));
-
-    // file listing table
-    html.push_str("<table class=\"list\">");
-    html.push_str("<tr><th>name</th><th>size</th><th>modified</th></tr>");
-
-    // parent directory link
-    if request_path != "/" {
-        html.push_str("<tr><td><a href=\"../\">../</a></td><td></td><td></td></tr>");
+fn map_fs_error(err: &fs::FsError) -> StatusCode {
+    match err {
+        fs::FsError::InvalidPath(_) => StatusCode::BAD_REQUEST,
+        fs::FsError::Io(io_err) => map_io_error(io_err),
     }
-
-    // directory entries
-    for entry in entries {
-        let display_name = if entry.is_dir {
-            format!("{}/", entry.name)
-        } else {
-            entry.name.clone()
-        };
-
-        let size_str = if entry.is_dir {
-            String::new()
-        } else {
-            format_file_size(entry.size)
-        };
-
-        let entry_path = if request_path.ends_with('/') {
-            format!("{request_path}{}", entry.name)
-        } else {
-            format!("{request_path}/{}", entry.name)
-        };
-
-        // add trailing slash for directories to avoid redirect
-        let final_entry_path = if entry.is_dir && !entry_path.ends_with('/') {
-            format!("{entry_path}/")
-        } else {
-            entry_path
-        };
-
-        html.push_str(&format!(
-            "<tr><td><a href=\"{}\">{}</a></td><td>{}</td><td>{}</td></tr>",
-            escape_html(&final_entry_path),
-            escape_html(&display_name),
-            escape_html(&size_str),
-            format_timestamp(entry.modified)
-        ));
-    }
-
-    html.push_str("</table>");
-    html.push_str("</main>");
-    html.push_str(&format!(
-        "<footer><p>Generated by <code>soop3 v{}</code></p></footer>",
-        env!("CARGO_PKG_VERSION")
-    ));
-    html.push_str("</div></body></html>");
-
-    Ok(html)
 }
 
-// safely resolve a request path relative to the public directory
-fn resolve_safe_path(
-    public_dir: &std::path::Path,
-    request_path: &str,
-) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    // remove leading slash from request path
-    let clean_path = request_path.strip_prefix('/').unwrap_or(request_path);
-
-    // use our secure path joining function
-    join_path_jailed(public_dir, clean_path).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+fn map_io_error(err: &std::io::Error) -> StatusCode {
+    match err.kind() {
+        ErrorKind::NotFound => StatusCode::NOT_FOUND,
+        ErrorKind::PermissionDenied => StatusCode::FORBIDDEN,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }

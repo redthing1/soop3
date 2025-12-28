@@ -10,20 +10,20 @@ use std::path::PathBuf;
 #[command(about = "the based http fileserver")]
 pub struct Cli {
     /// public directory to serve
-    #[arg(default_value = ".")]
-    pub public_dir: PathBuf,
+    #[arg(value_name = "PUBLIC_DIR")]
+    pub public_dir: Option<PathBuf>,
 
     /// enable file uploads
     #[arg(short = 'u', long)]
     pub enable_upload: bool,
 
     /// host to listen on
-    #[arg(short = 'l', long, default_value = "0.0.0.0")]
-    pub host: String,
+    #[arg(short = 'l', long)]
+    pub host: Option<String>,
 
     /// port to listen on
-    #[arg(short = 'p', long, default_value = "8000")]
-    pub port: u16,
+    #[arg(short = 'p', long)]
+    pub port: Option<u16>,
 
     /// config file to use
     #[arg(short = 'c', long)]
@@ -158,4 +158,37 @@ fn default_max_request_size() -> u64 {
 
 fn default_true() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn security_policy_parsing() {
+        assert_eq!(
+            "authenticate_none".parse::<SecurityPolicy>().unwrap(),
+            SecurityPolicy::AuthenticateNone
+        );
+        assert_eq!(
+            "authenticate_upload".parse::<SecurityPolicy>().unwrap(),
+            SecurityPolicy::AuthenticateUpload
+        );
+        assert_eq!(
+            "authenticate_all".parse::<SecurityPolicy>().unwrap(),
+            SecurityPolicy::AuthenticateAll
+        );
+
+        assert_eq!(
+            "AUTHENTICATE_ALL".parse::<SecurityPolicy>().unwrap(),
+            SecurityPolicy::AuthenticateAll
+        );
+        assert_eq!(
+            "Authenticate_Upload".parse::<SecurityPolicy>().unwrap(),
+            SecurityPolicy::AuthenticateUpload
+        );
+
+        assert!("invalid".parse::<SecurityPolicy>().is_err());
+        assert!("".parse::<SecurityPolicy>().is_err());
+    }
 }

@@ -2,12 +2,13 @@
 
 use anyhow::{Context, Result};
 use axum::{
-    Router, middleware,
+    Router,
+    extract::DefaultBodyLimit,
+    middleware,
     routing::{get, post},
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, info, warn};
 
@@ -39,23 +40,21 @@ impl AppState {
 
 /// create the axum application with all routes and middleware
 pub fn create_app(config: AppConfig) -> Router {
-    create_app_impl(config, true)
+    create_app_impl(config)
 }
 
-/// create app for testing (skips validation)
+/// create app for testing
 #[cfg(feature = "test-helpers")]
 #[allow(dead_code)]
 pub fn create_test_app(config: AppConfig) -> Router {
-    create_app_impl(config, false)
+    create_app_impl(config)
 }
 
 /// internal implementation for app creation
-fn create_app_impl(config: AppConfig, validate: bool) -> Router {
-    if validate {
-        // in production, we expect configuration to be pre-validated
-        // but for testing, we might want to skip validation
-    }
+fn create_app_impl(config: AppConfig) -> Router {
     let app_state = AppState::new(config);
+    let body_limit =
+        usize::try_from(app_state.config.upload.max_request_size).unwrap_or(usize::MAX);
 
     Router::new()
         // static asset routes
@@ -68,19 +67,17 @@ fn create_app_impl(config: AppConfig, validate: bool) -> Router {
         // main file serving route
         .route("/{*path}", get(handle_request))
         // middleware stack
-        .layer(
-            ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http())
-                .layer(middleware::from_fn_with_state(
-                    app_state.clone(),
-                    handle_cors,
-                ))
-                .layer(middleware::from_fn(add_security_headers)),
-        )
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             authenticate_if_required,
         ))
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            handle_cors,
+        ))
+        .layer(middleware::from_fn(add_security_headers))
+        .layer(DefaultBodyLimit::max(body_limit))
+        .layer(TraceLayer::new_for_http())
         .with_state(app_state)
 }
 
