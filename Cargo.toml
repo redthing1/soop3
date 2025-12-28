@@ -1,6 +1,6 @@
 [package]
 name = "soop3"
-version = "0.12.1"
+version = "0.13.0"
 edition = "2024"
 authors = ["redthing1"]
 description = "the based http fileserver (rust port)"
