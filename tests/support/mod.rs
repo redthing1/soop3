@@ -46,6 +46,32 @@ pub fn get(uri: &str) -> Request<Body> {
         .unwrap()
 }
 
+pub fn get_with_range(uri: &str, range: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .header(header::RANGE, range)
+        .body(Body::empty())
+        .unwrap()
+}
+
+pub fn head(uri: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::HEAD)
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap()
+}
+
+pub fn head_with_range(uri: &str, range: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::HEAD)
+        .uri(uri)
+        .header(header::RANGE, range)
+        .body(Body::empty())
+        .unwrap()
+}
+
 pub fn multipart_body(boundary: &str, filename: &str, content: &[u8]) -> Vec<u8> {
     [
         format!("--{boundary}\r\n").as_bytes(),

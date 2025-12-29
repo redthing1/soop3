@@ -146,24 +146,27 @@ pub fn validate_credentials(
     };
 
     // constant-time comparison to prevent timing attacks
-    constant_time_eq(
+    let user_ok = constant_time_eq(
         credentials.username.as_bytes(),
         expected_username.as_bytes(),
-    ) && constant_time_eq(
+    );
+    let pass_ok = constant_time_eq(
         credentials.password.as_bytes(),
         expected_password.as_bytes(),
-    )
+    );
+
+    user_ok & pass_ok
 }
 
 /// constant-time string comparison to prevent timing attacks
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
+    let max_len = a.len().max(b.len());
+    let mut result = (a.len() ^ b.len()) as u64;
 
-    let mut result = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        result |= x ^ y;
+    for i in 0..max_len {
+        let x = *a.get(i).unwrap_or(&0);
+        let y = *b.get(i).unwrap_or(&0);
+        result |= (x ^ y) as u64;
     }
 
     result == 0

@@ -4,6 +4,7 @@ use chrono::{DateTime, Local};
 use std::path::Path;
 use std::time::SystemTime;
 use tokio::fs;
+use tracing::warn;
 
 /// metadata for a directory entry
 #[derive(Debug, Clone)]
@@ -52,13 +53,24 @@ pub async fn collect_directory_entries(
     let mut read_dir = fs::read_dir(dir_path).await?;
 
     while let Some(entry) = read_dir.next_entry().await? {
-        let metadata = entry.metadata().await?;
+        let metadata = match entry.metadata().await {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                warn!(
+                    "failed to read metadata for {}: {}",
+                    entry.path().display(),
+                    err
+                );
+                continue;
+            }
+        };
         let file_name = entry.file_name();
+        let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
 
         entries.push(DirectoryEntry {
             name: file_name.to_string_lossy().into_owned(),
             size: metadata.len(),
-            modified: metadata.modified()?,
+            modified,
             is_dir: metadata.is_dir(),
         });
     }

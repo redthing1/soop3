@@ -396,6 +396,49 @@ async fn cors_headers_present_on_auth_failure() {
 }
 
 #[tokio::test]
+async fn cors_headers_present_on_payload_too_large() {
+    let temp_dir = TempDir::new().unwrap();
+    let public_dir = temp_dir.path();
+
+    let mut config = base_config(public_dir);
+    config.server.enable_upload = true;
+    config.server.cors_origins = vec!["https://example.com".to_string()];
+    config.upload = UploadConfig {
+        max_request_size: 16,
+        prepend_timestamp: false,
+        prevent_overwrite: false,
+        ..Default::default()
+    };
+
+    let app = app(config);
+    let body = multipart_body(BOUNDARY, "large.txt", &vec![b'x'; 128]);
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method(Method::POST)
+                .uri("/")
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .header(header::ORIGIN, "https://example.com")
+                .body(axum::body::Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .unwrap(),
+        "https://example.com"
+    );
+}
+
+#[tokio::test]
 async fn cors_wildcard_allows_any_origin() {
     let temp_dir = TempDir::new().unwrap();
     let public_dir = temp_dir.path();

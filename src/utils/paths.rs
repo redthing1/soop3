@@ -23,6 +23,9 @@ pub enum PathTraversalError {
 
     #[error("windows prefix not allowed")]
     WindowsPrefix,
+
+    #[error("backslash not allowed in path")]
+    Backslash,
 }
 
 const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
@@ -136,6 +139,9 @@ fn normalize_path_component(component: &str) -> Result<PathBuf, PathTraversalErr
 
     if decoded.contains('\0') {
         return Err(PathTraversalError::InvalidEncoding);
+    }
+    if decoded.contains('\\') {
+        return Err(PathTraversalError::Backslash);
     }
 
     // build normalized path from components

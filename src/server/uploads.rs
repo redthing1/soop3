@@ -51,7 +51,14 @@ impl UploadError {
             UploadError::InvalidBase => StatusCode::INTERNAL_SERVER_ERROR,
             UploadError::Conflict => StatusCode::CONFLICT,
             UploadError::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            UploadError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            UploadError::Io(err) => match err.kind() {
+                std::io::ErrorKind::AlreadyExists => StatusCode::CONFLICT,
+                std::io::ErrorKind::IsADirectory => StatusCode::CONFLICT,
+                std::io::ErrorKind::NotADirectory => StatusCode::CONFLICT,
+                std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
+                std::io::ErrorKind::PermissionDenied => StatusCode::FORBIDDEN,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            },
             UploadError::Multipart(err) => err.status(),
         }
     }
@@ -230,8 +237,22 @@ async fn write_multipart_field_streaming(
     drop(file);
 
     if let Err(err) = fs::rename(&temp_path, target_path).await {
-        let _ = fs::remove_file(&temp_path).await;
-        return Err(UploadError::Io(err));
+        match err.kind() {
+            ErrorKind::AlreadyExists => {
+                if let Err(remove_err) = fs::remove_file(target_path).await {
+                    let _ = fs::remove_file(&temp_path).await;
+                    return Err(UploadError::Io(remove_err));
+                }
+                if let Err(rename_err) = fs::rename(&temp_path, target_path).await {
+                    let _ = fs::remove_file(&temp_path).await;
+                    return Err(UploadError::Io(rename_err));
+                }
+            }
+            _ => {
+                let _ = fs::remove_file(&temp_path).await;
+                return Err(UploadError::Io(err));
+            }
+        }
     }
 
     Ok(written)

@@ -3,7 +3,7 @@
 use axum::{
     body::Body,
     extract::{OriginalUri, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, Method, StatusCode, header},
     response::Response,
 };
 use http_range_header::parse_range_header as parse_http_range;
@@ -23,8 +23,9 @@ pub async fn handle_root_request(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
+    method: Method,
 ) -> Result<Response, StatusCode> {
-    handle_request_internal(state, uri.path().to_string(), headers).await
+    handle_request_internal(state, uri.path().to_string(), headers, method).await
 }
 
 // main request handler - routes to file or directory handling
@@ -33,8 +34,9 @@ pub async fn handle_request(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
+    method: Method,
 ) -> Result<Response, StatusCode> {
-    handle_request_internal(state, uri.path().to_string(), headers).await
+    handle_request_internal(state, uri.path().to_string(), headers, method).await
 }
 
 // internal request handling logic
@@ -42,8 +44,9 @@ async fn handle_request_internal(
     state: AppState,
     file_path: String,
     headers: HeaderMap,
+    method: Method,
 ) -> Result<Response, StatusCode> {
-    info!("processing GET request");
+    info!("processing {} request", method.as_str());
 
     // validate and resolve path securely
     let resolved_path = match fs::resolve_request_path(&state.config.server.public_dir, &file_path)
@@ -83,9 +86,9 @@ async fn handle_request_internal(
     };
 
     if metadata.is_dir() {
-        handle_directory_request(state, resolved_path, file_path).await
+        handle_directory_request(state, resolved_path, file_path, headers, method).await
     } else {
-        handle_file_request(resolved_path, headers).await
+        handle_file_request(resolved_path, headers, method).await
     }
 }
 
@@ -93,8 +96,10 @@ async fn handle_request_internal(
 async fn handle_file_request(
     file_path: PathBuf,
     headers: HeaderMap,
+    method: Method,
 ) -> Result<Response, StatusCode> {
     info!("serving file: {}", file_path.display());
+    let is_head = method == Method::HEAD;
 
     let file_meta = match fs::open_file_for_serving(&file_path).await {
         Ok(meta) => meta,
@@ -113,11 +118,7 @@ async fn handle_file_request(
             Ok(s) => s,
             Err(_) => {
                 warn!("invalid range header encoding");
-                return Response::builder()
-                    .status(StatusCode::RANGE_NOT_SATISFIABLE)
-                    .header(header::CONTENT_RANGE, format!("bytes */{file_size}"))
-                    .body(Body::empty())
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+                return range_not_satisfiable(file_size);
             }
         };
 
@@ -127,7 +128,11 @@ async fn handle_file_request(
                     Ok(valid_ranges) => {
                         if valid_ranges.is_empty() {
                             // no valid ranges, serve full file
-                            serve_full_file(file, file_size, mime_type).await
+                            if is_head {
+                                serve_full_file_head(file_size, mime_type)
+                            } else {
+                                serve_full_file(file, file_size, mime_type).await
+                            }
                         } else {
                             // serve first range (we don't support multipart ranges)
                             let range = &valid_ranges[0];
@@ -137,31 +142,31 @@ async fn handle_file_request(
                                 "serving partial content: bytes {}-{}/{}",
                                 start, end, file_size
                             );
-                            serve_partial_file(file, start, end, file_size, mime_type).await
+                            if is_head {
+                                serve_partial_file_head(start, end, file_size, mime_type)
+                            } else {
+                                serve_partial_file(file, start, end, file_size, mime_type).await
+                            }
                         }
                     }
                     Err(_) => {
                         warn!("range not satisfiable after validation");
-                        Response::builder()
-                            .status(StatusCode::RANGE_NOT_SATISFIABLE)
-                            .header(header::CONTENT_RANGE, format!("bytes */{file_size}"))
-                            .body(Body::empty())
-                            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+                        range_not_satisfiable(file_size)
                     }
                 }
             }
             Err(_) => {
                 warn!("malformed range header");
-                Response::builder()
-                    .status(StatusCode::RANGE_NOT_SATISFIABLE)
-                    .header(header::CONTENT_RANGE, format!("bytes */{file_size}"))
-                    .body(Body::empty())
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+                range_not_satisfiable(file_size)
             }
         }
     } else {
         // no range header, serve full file
-        serve_full_file(file, file_size, mime_type).await
+        if is_head {
+            serve_full_file_head(file_size, mime_type)
+        } else {
+            serve_full_file(file, file_size, mime_type).await
+        }
     }
 }
 
@@ -204,6 +209,30 @@ async fn serve_partial_file(
         })
 }
 
+fn serve_partial_file_head(
+    start: u64,
+    end: u64,
+    file_size: u64,
+    mime_type: String,
+) -> Result<Response, StatusCode> {
+    let take_bytes = end - start + 1;
+
+    Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(header::CONTENT_TYPE, mime_type)
+        .header(header::CONTENT_LENGTH, take_bytes)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{file_size}"),
+        )
+        .body(Body::empty())
+        .map_err(|e| {
+            error!("failed to build partial response: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
 // serve the complete file
 async fn serve_full_file(
     file: File,
@@ -225,12 +254,29 @@ async fn serve_full_file(
         })
 }
 
+fn serve_full_file_head(file_size: u64, mime_type: String) -> Result<Response, StatusCode> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime_type)
+        .header(header::CONTENT_LENGTH, file_size)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .body(Body::empty())
+        .map_err(|e| {
+            error!("failed to build response: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
 // handle requests for directories
 async fn handle_directory_request(
     state: AppState,
     dir_path: PathBuf,
     request_path: String,
+    headers: HeaderMap,
+    method: Method,
 ) -> Result<Response, StatusCode> {
+    let is_head = method == Method::HEAD;
+
     // ensure path ends with slash for directories
     if !request_path.ends_with('/') {
         info!("redirecting directory request to add trailing slash");
@@ -249,7 +295,7 @@ async fn handle_directory_request(
             Ok(metadata) => {
                 if metadata.is_file() {
                     info!("serving index file: {}", index_path.display());
-                    return handle_file_request(index_path, HeaderMap::new()).await;
+                    return handle_file_request(index_path, headers, method).await;
                 }
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -266,7 +312,7 @@ async fn handle_directory_request(
 
     // generate directory listing
     info!("serving directory listing: {}", dir_path.display());
-    generate_directory_listing(&state, &dir_path, &request_path).await
+    generate_directory_listing(&state, &dir_path, &request_path, is_head).await
 }
 
 // generate html directory listing
@@ -274,6 +320,7 @@ async fn generate_directory_listing(
     state: &AppState,
     dir_path: &StdPath,
     request_path: &str,
+    is_head: bool,
 ) -> Result<Response, StatusCode> {
     // collect directory entries
     let mut entries = fs::collect_directory_entries_filtered(
@@ -293,7 +340,12 @@ async fn generate_directory_listing(
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-        .body(Body::from(html))
+        .header(header::CONTENT_LENGTH, html.len().to_string())
+        .body(if is_head {
+            Body::empty()
+        } else {
+            Body::from(html)
+        })
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
@@ -307,7 +359,16 @@ fn map_fs_error(err: &fs::FsError) -> StatusCode {
 fn map_io_error(err: &std::io::Error) -> StatusCode {
     match err.kind() {
         ErrorKind::NotFound => StatusCode::NOT_FOUND,
+        ErrorKind::NotADirectory => StatusCode::NOT_FOUND,
         ErrorKind::PermissionDenied => StatusCode::FORBIDDEN,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
+}
+
+fn range_not_satisfiable(file_size: u64) -> Result<Response, StatusCode> {
+    Response::builder()
+        .status(StatusCode::RANGE_NOT_SATISFIABLE)
+        .header(header::CONTENT_RANGE, format!("bytes */{file_size}"))
+        .body(Body::empty())
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }

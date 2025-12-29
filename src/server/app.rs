@@ -71,12 +71,12 @@ fn create_app_impl(config: AppConfig) -> Router {
             app_state.clone(),
             authenticate_if_required,
         ))
+        .layer(DefaultBodyLimit::max(body_limit))
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             handle_cors,
         ))
         .layer(middleware::from_fn(add_security_headers))
-        .layer(DefaultBodyLimit::max(body_limit))
         .layer(TraceLayer::new_for_http())
         .with_state(app_state)
 }

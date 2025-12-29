@@ -67,19 +67,13 @@ pub fn build_listing_html(entries: &[DirectoryEntry], request_path: &str) -> Str
             format_file_size(entry.size)
         };
 
-        let entry_path = if request_path.ends_with('/') {
-            format!("{request_path}{}", entry.name)
+        // use relative links to avoid double-encoding any pre-encoded request paths
+        let entry_path = if entry.is_dir {
+            format!("{}/", entry.name)
         } else {
-            format!("{request_path}/{}", entry.name)
+            entry.name.clone()
         };
-
-        // add trailing slash for directories to avoid redirect
-        let final_entry_path = if entry.is_dir && !entry_path.ends_with('/') {
-            format!("{entry_path}/")
-        } else {
-            entry_path
-        };
-        let encoded_entry_path = encode_path_segments(&final_entry_path);
+        let encoded_entry_path = encode_path_segments(&entry_path);
 
         html.push_str(&format!(
             "<tr><td><a href=\"{}\">{}</a></td><td>{}</td><td>{}</td></tr>",
